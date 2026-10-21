@@ -1,0 +1,100 @@
+---
+description: Scientific ML rules — preserve mathematics, reproducibility, explicit tensor operations. Merged from former Rule 04.
+alwaysApply: true
+---
+
+# Scientific ML Rules
+
+> **Note (2026-09-20):** This rule merges the former Rule 04 ("scientific-ml") into Rule 09 ("research-paper"). The two were duplicating each other on reproducibility and silent-change prevention. The content below is the union of both.
+
+## Always preserve
+
+- Mathematical formulation of every component.
+- Tensor shapes and dimensions across the forward pass.
+- Numerical behavior (do not silently change float32 / float64, normalization, epsilons).
+- Initialization strategy.
+- Random seed assumptions.
+- Evaluation protocol and data splits.
+
+## Never silently change
+
+- Loss formulation.
+- Normalization, activation, or regularisation.
+- Data augmentation, shuffling, splitting.
+- Optimizer, learning rate schedule, stopping criterion.
+- Any hyperparameter that affects reported results.
+
+## Before modifying algorithms
+
+Understand:
+
+- Input and output flow of every module.
+- The mathematical intention behind each operation.
+- The training objective and its components.
+- Dependencies between modules (which loss uses which encoder output, etc.).
+
+If a change in one module can affect outputs of another, state this explicitly before implementing.
+
+## Explicit tensor operations
+
+- Write tensor ops one step at a time when it improves clarity.
+- Name intermediate tensors when their meaning is non-obvious.
+- Comment shapes only when the comment carries information not visible in the code.
+
+## Scientific issues
+
+- If you find a latent scientific bug (wrong init, broken masking, silent NaN propagation), **do not fix it silently**. Explain the issue and ask the user before changing scientific behaviour.
+- If a tensor has the wrong shape, raise an informative error — do not silently `squeeze`, `reshape(-1)`, or fill zeros. (See also Rule 13: silent control flow is forbidden.)
+
+## Reproducibility
+
+- No hidden global state.
+- No implicit data modification (e.g. in-place normalizations on the input tensor).
+- Snapshot pre/post numerics when refactoring or modifying numerical algorithms — compare bit-exact or with documented tolerance.
+- Pin the seed at every entry point.
+- Cache deterministic intermediates (downloaded data, sampled grids) by content hash.
+- Lock the environment (`uv.lock`); pin the Python minor version.
+
+## Think deeply before writing code
+
+Before adding or changing any non-trivial piece of code:
+
+1. **Locate the source of the method.** Cite the original paper, standard textbook, or canonical reference. If you do not know where a method comes from, **search the literature first** — do not guess, do not hallucinate the procedure.
+2. **State the mathematical formulation** in 1–3 lines (in a comment or in your reply) before writing the implementation.
+3. **Map the implementation to the math** 1:1. Names should mirror the paper notation (e.g. `alpha`, `mu`, `sigma`, `H`, `S0`, `KL`).
+4. **Justify research decisions** at the call site, not in a random docstring.
+5. When the question is research-level and outside your training data, **search the web** for the canonical reference before answering.
+
+## Never fabricate methods
+
+- If a piece of code claims to implement algorithm X but X is actually Y, that is research misconduct.
+- If you do not recognise an algorithm in the codebase, say **"I do not recognise this; please point me to the reference"** instead of guessing.
+- If the user asks for a method that does not exist or that you cannot verify, search the web for the canonical reference before implementing.
+- When external packages are used as the reference implementation (`scipy.stats`, `pyro`, …), state which one and which version.
+
+## Reporting scientific issues
+
+- When you find a **latent scientific bug** (broken masking, wrong prior, silent NaN propagation, off-by-one in a window, wrong activation for the role), **do not fix it silently**.
+- When you make a research decision (loss weighting, scheduler shape, data filter), **say out loud** what you decided and why.
+- When the user asks a research question you cannot verify, **say so explicitly** rather than improvising.
+
+## Suggested layout (apply only when restructuring)
+
+```
+<project>/
+├── pyproject.toml
+├── README.md
+├── src/<pkg>/
+│   ├── data/
+│   ├── models/
+│   ├── losses/
+│   ├── priors/
+│   ├── sim/
+│   └── utils/
+├── experiments/
+├── tests/
+├── results/
+└── paper/
+```
+
+Do not restructure unless asked.

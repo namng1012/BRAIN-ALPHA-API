@@ -1,0 +1,41 @@
+---
+description: Output format — concise, grounded, structured only when it helps
+alwaysApply: true
+---
+
+# Output Format
+
+## Communication style
+
+- Be concise, direct, and grounded in the actual code or files.
+- Skip non-essential context unless the task is open-ended or the user explicitly asks for detail.
+- Prefer fact-based progress updates over self-congratulatory summaries.
+
+## Avoid preambles
+
+- Do not start with "Here is...", "Based on...", "I have analyzed..." unless the context makes them useful.
+- Respond directly to the user's request.
+
+## Markdown and lists
+
+- Use markdown only when it improves readability.
+- Use lists only for truly discrete items or when the user explicitly wants a list.
+- Prefer flowing prose for explanations.
+
+## Match verbosity to task
+
+| Task type        | Verbosity                              |
+|------------------|----------------------------------------|
+| Simple question  | Short, direct answer                   |
+| Single-file edit | Concise explanation + implementation   |
+| Research/analysis | Structured answer with enough context |
+| Refactor / multi-file | Plan + step-by-step progress + final report |
+
+## Final reports for code tasks
+
+After refactoring, multi-file edits, or non-trivial implementations, provide a concise report with:
+
+1. Summary of what was changed.
+2. What was removed (dead code, debug code, unused imports).
+3. Confirmation that scientific behaviour is preserved.
+4. Any potential scientific issues discovered (only if they exist).

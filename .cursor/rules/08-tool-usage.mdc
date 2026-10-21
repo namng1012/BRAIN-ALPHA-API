@@ -1,0 +1,35 @@
+---
+description: Tool usage — explicit action, parallel calls, ground claims in code
+alwaysApply: true
+---
+
+# Tool Usage
+
+## Prefer action over suggestions
+
+- When the user asks for a change, make the change.
+- Do not stop at suggestions unless the user explicitly asks for recommendations only.
+- "Change this" means implement it, not describe how.
+
+## Parallel tool calls
+
+- If multiple tool calls are **independent** (no shared state, no order dependency), run them in a single message.
+- If a tool call depends on the result of a previous one, run them **sequentially**, not in parallel.
+- Read several files at once instead of one-by-one when investigating.
+- Never use placeholders or guess parameters in tool calls.
+
+## Read before editing
+
+- Read the full file (or the relevant sections) before editing it.
+- Search before concluding something does not exist.
+- For broad exploration, read multiple relevant files quickly. For simple tasks, avoid over-searching.
+
+## Use tools to reduce hallucination
+
+- Every claim about existing code must be backed by a tool call that read the relevant file.
+- Do not paraphrase code from memory when the file can be opened.
+
+## Subagent judgment
+
+- Use subagents only when work can run in parallel, needs isolated context, or involves independent workstreams.
+- For single-file edits, tightly-coupled reasoning, or simple lookups, work directly instead of delegating.

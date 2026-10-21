@@ -1,0 +1,41 @@
+---
+description: ACE_API__Gold_/ is read-only reference code — read OK, never modify
+alwaysApply: true
+globs:
+  - "ACE_API__Gold_/**"
+---
+
+# Rule 16 — Reference Code: Read-Only
+
+`ACE_API__Gold_/` chứa code tham khảo từ WorldQuant BRAIN Alpha Creation Engine. Folder này thuộc **danh mục reference**, KHÔNG thuộc source code của dự án.
+
+## Quy tắc
+
+### Được phép
+
+- **Đọc** file (Read, Grep, Glob) để hiểu API contract, tên endpoint, schema payload, hành vi mong đợi.
+- **Trích dẫn** trong chat reply khi giải thích cho user (kèm `startLine:endLine:filepath`).
+
+### Bị cấm tuyệt đối
+
+- **StrReplace / Edit** trong bất kỳ file nào dưới `ACE_API__Gold_/`.
+- **Write** đè file trong folder đó.
+- **Xoá, đổi tên, tạo file mới** trong folder đó.
+- **`git add`** hay `mv` các file ra ngoài để rồi sửa.
+- **Copy/paste nguyên đoạn code** từ reference vào `main.py`, `src/`, `tests/` của dự án mới.
+
+Khi cần dùng reference để viết code mới:
+
+1. Đọc reference để hiểu **API hành vi**.
+2. Cite **paper / textbook / official docs** làm nguồn chính.
+3. Viết lại từ nguồn gốc, không bê nguyên implementation.
+
+## Conflict resolution
+
+- Rule 12 (do only what's asked) và rule này cùng cấm sửa file user không yêu cầu — phù hợp.
+- Rule 13 (no silent control-flow) không ngoại lệ: reference code giữ nguyên cả `try/except` của họ, không "dọn".
+- Nếu user **trực tiếp ra lệnh sửa** reference code, dừng và xác nhận lại trước khi làm.
+
+## Khi phát hiện bug trong reference code
+
+Đây là mẫu phổ biến — **không sửa**. Ghi bug vào chat hoặc vào `Diary/methodology.md` với tag `reference-bug-not-fixed` để theo dõi, code dự án mới phải viết đúng từ đầu dựa trên paper/docs chứ không vá reference.

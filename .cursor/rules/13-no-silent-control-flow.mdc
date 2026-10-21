@@ -1,0 +1,95 @@
+---
+description: No try/except, print, or raise unless explicitly required by the user
+alwaysApply: true
+---
+
+# Rule 13 — No Silent Control-Flow Exceptions
+
+This rule applies to **new code I write or edit**. It does not retroactively forbid patterns already in the codebase.
+
+## What this rule forbids without explicit user instruction
+
+### 1. `try / except` blocks
+
+Do not wrap code in `try:` blocks unless the user asked for error handling.
+
+```python
+# FORBIDDEN — I added this "just in case"
+try:
+    value = df["close"].iloc[0]
+except (KeyError, IndexError):
+    value = None
+```
+
+If the code might fail, **let it fail**. The traceback is the user's friend — it tells them exactly which line broke and why. A swallowed exception hides the bug.
+
+Acceptable use (user must have asked, or it's existing code):
+- Re-raise with extra context: `except SomeError as e: raise RuntimeError("...loading config") from e`.
+- Retry / backoff logic the user requested.
+- Public library entry points where the user explicitly asked for graceful failure.
+
+### 2. `print(...)` statements
+
+Do not sprinkle `print()` for debugging, progress, or "user feedback" unless the user asked.
+
+```python
+# FORBIDDEN — I added this to "see what's happening"
+print(f"loaded {len(df)} rows")
+print("done")
+```
+
+If the user wants output they will say so. The current script already has three intentional prints (`[fetch]`, `[done]`, `[range]`, `[skip]`) — those stay because the user wanted them.
+
+If I need to inspect a value mid-task, use the debugger or a one-off shell command, not a permanent `print`.
+
+### 3. `raise ...` statements
+
+Do not invent custom exceptions the user did not ask for.
+
+```python
+# FORBIDDEN — I added this to "validate the input"
+if start >= end:
+    raise ValueError("start must be before end")
+```
+
+Only `raise` when:
+- The user asked for that validation.
+- Or the existing code already raises there (preserve current behaviour).
+- Or a library contract requires it (e.g. `__enter__` raising on bad context).
+
+## Decision tree before adding any of the three
+
+1. Did the user ask me to add error handling, logging, or validation? → Add it, scoped exactly to what they asked.
+2. Is the construct already in the file I'm editing? → Keep it (out of scope for this rule).
+3. Otherwise → **don't add it**.
+
+## What this rule does NOT forbid
+
+- `raise` inside an existing `try` block to re-raise with context (`raise ... from e`).
+- `raise NotImplementedError` when the user asked for a stub.
+- `assert` statements in test code.
+- One-line `raise` that already exists in the code I'm reading.
+- `print` statements the user explicitly asked for, or that already exist in the code.
+- Library code (`requests`, `pandas`) raising on its own — that's their job, not mine.
+
+## Exceptions to this rule
+
+The following are **not** forbidden even without user instruction, because a higher-precedence rule requires them:
+
+- `raise ValueError(...)` for shape/dtype mismatches in tensor code (required by Rule 09 — "no silent fallbacks").
+- `raise NotImplementedError` when the user asked for a stub.
+- `assert` statements in test code.
+- One-line `raise` that already exists in the code being read.
+- `print` statements the user explicitly asked for, or that already exist in the code.
+- Library code (`requests`, `pandas`) raising on its own — that's their job, not mine.
+
+## Conflict resolution
+
+Rule 12 (do only what's asked) and Rule 13 (no silent control-flow) work together:
+
+- Rule 12 says: don't add features.
+- Rule 13 says: of the features you *don't* add, error handling and logging are the most tempting — and the most harmful when added silently.
+
+For scientific correctness exceptions, see Rule 09 — it overrides Rule 13 for shape/dtype/safety checks.
+
+Both push toward the same minimalism: write the direct path, let exceptions surface, and let the user decide what guardrails they want.

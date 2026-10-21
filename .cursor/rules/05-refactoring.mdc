@@ -1,0 +1,48 @@
+---
+description: Refactoring rules — read first, surgical changes, clean but conservative
+alwaysApply: true
+---
+
+# Refactoring Rules
+
+## Before touching code
+
+1. Read the complete file. Do not refactor a file you have not fully inspected.
+2. Identify: duplicated code, dead code, debug prints, unnecessary comments, unclear names, hidden side effects.
+3. State a brief refactor plan (which sections will change, which will not).
+
+## Refactor toward
+
+- Smaller functions with one clear responsibility.
+- Explicit computation flow that maps 1:1 to mathematical equations.
+- Clean, organized imports (stdlib / third-party / local).
+- Meaningful variable names that match the paper notation.
+- Module separation: `data/`, `models/`, `losses/`, `utils/`, `experiments/`, `main.py`.
+
+## Remove
+
+- `print` debugging statements.
+- Commented-out old code.
+- Useless comments that only restate the next line.
+- Unused imports, variables, and unreachable code.
+
+## Keep
+
+- Mathematical assumptions (e.g. `"Init bias = 0.0 → preserves symmetry at start"`).
+- Numerical stability reasons (e.g. `"eps = 1e-8 prevents division by zero when row variance is 0"`).
+- Non-obvious research decisions (e.g. `"alpha clipped to [-1, 1] → preserves sign convention of the score variable"`).
+- Citations to the paper or textbook the implementation follows (e.g. `"Eq. (12) of Smith 2023"`).
+
+## Surgical changes
+
+- Touch only what the user requested.
+- Do not "improve" adjacent code, comments, or formatting while editing.
+- Match the existing style of the file you are editing.
+- If you notice unrelated dead code, mention it in the report — do not silently delete it.
+
+## Verification
+
+- After refactoring, verify the code path numerically (snapshot → modify → snapshot diff) before claiming the refactor is correct.
+- **Snapshot scope**: only required when refactoring code that affects numerics (training loop, loss, model forward, evaluation metric). Not required for data loaders, config blocks, file I/O, or pure refactoring that does not touch tensor / array operations.
+- For scientific code, prefer **bit-exact** equivalence with the pre-refactor version.
+- Any deviation must be documented in the final report.

@@ -1,0 +1,81 @@
+---
+description: No yapping — think before speaking, reply short, dense, complete; never pad or restate. Overrides Rule 07 and Rule 12 on output style.
+alwaysApply: true
+---
+
+# Rule 15 — No Yapping
+
+The user reads every word. Every sentence must earn its place.
+
+**Precedence:** for chat-response prose, this rule outranks Rule 07 (output format) and Rule 12 (do only what's asked) when they conflict. For code edits, Rule 12 still applies.
+
+## Core principle
+
+**Think before you write. Then write the minimum that fully answers.**
+
+## What this rule forbids
+
+### 1. Padding
+
+- ❌ Restating the question ("You asked me to fix X. I will now fix X by...").
+- ❌ Reassurance filler ("Sure, I can help with that!", "Great question!").
+- ❌ Closing pleasantries ("Let me know if you need anything else!", "Hope this helps!").
+- ❌ Self-narration ("Let me start by reading the file...", "Now I will...", "After that I...").
+- ❌ Echoing the user back to them ("So the layout is [train | test]...").
+- ❌ Multi-paragraph disclaimers for simple answers.
+
+### 2. Yapping
+
+- ❌ Explaining what you are about to do *before* doing it (just do it).
+- ❌ Listing 5 alternatives when 1 will do.
+- ❌ Repeating the same idea in three different phrasings.
+- ❌ Listing every file touched when one-line summary suffices.
+- ❌ Explaining what a function does *inside* the answer when the code speaks for itself.
+- ❌ Adding "Note that...", "It's worth mentioning...", "Importantly..." paragraphs.
+
+### 3. Verbose error / status reporting
+
+- ❌ Long progress narration (`Step 1/3 done. Now Step 2...`).
+- ❌ Repeating the same summary table the user can read at the bottom.
+- ❌ Reporting intermediate tool results that have no decision value.
+
+## What the reply must be
+
+**Short. Dense. Complete.**
+
+- One sentence per fact. If two facts need their own sentence, use two sentences.
+- Code citations use the `startLine:endLine:filepath` format, no restatement.
+- Tables only when comparison is the point; otherwise bullets.
+- Numbered steps only when order matters; otherwise bullets.
+
+### Length guideline
+
+- Single-line answer (≤ 1 sentence) when the user's question is ≤ 1 sentence.
+- 3–5 lines for a code change summary (what changed, where, why).
+- 5–15 lines for an explanation that the user genuinely needs.
+- **More than 20 lines of prose means you are padding.** Cut.
+
+## Before sending any reply, audit
+
+Ask yourself in order:
+
+1. Did the user already see this information (e.g. in tool output)?
+2. Can I delete this sentence without losing any information?
+3. Am I explaining *what* I'm doing instead of *doing* it?
+4. Did I add a "summary table of what I just did" on top of an answer that already says what I did?
+5. Is the length proportional to the question's complexity?
+
+If any answer is **yes** → cut before sending.
+
+## What this rule does NOT forbid
+
+- Explaining a non-obvious *decision* the user cannot reverse-engineer from the diff (e.g. "I chose `min(...)` over `max(...)` because the derived `train_hours` was smaller than the floor").
+- Surfacing a **trade-off** the user must choose between (then use `AskQuestion`, not a long paragraph).
+- Quoting a **code reference** the user can click into.
+- A **final audit checklist** for non-trivial code edits (3–5 bullets max).
+
+## Relationship with other rules
+
+- Rule 12 (do only what's asked) governs *what* you do; Rule 15 governs *how you write about it*.
+- Rule 14 (diary logging) is the *one* place where longer structured prose is allowed, because the diary is a research log, not chat.
+- When in doubt, prefer **shorter**. The user can always ask "tell me more about X".

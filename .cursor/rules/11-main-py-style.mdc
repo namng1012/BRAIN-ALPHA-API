@@ -1,0 +1,103 @@
+---
+description: Style for top-level `main.py` — research-code clarity, no parser abstraction
+alwaysApply: false
+globs:
+  - "main.py"
+---
+
+# `main.py` Style — Research Code, No Parsers
+
+## Scope
+
+This rule applies **only to the top-level `main.py`**. Every other file in the repo follows rules `01`–`10` as usual. If a file becomes long enough to need refactoring, split it into a module — do not let `main.py` grow beyond a few hundred lines.
+
+The whole point of `main.py` is to be **the file the author re-reads top-to-bottom every time they come back to this project**. It is *not* a CLI library; it is a research narrative written in Python.
+
+## Principles
+
+1. **Readable like a notebook.** A reader with no project context should be able to skim `main.py` from top to bottom and understand the entire experiment. Think "Jupyter cell", not "production script".
+2. **No parser / no CLI library.** No `argparse`, no `click`, no `typer`. No `sys.argv` parsing. Config lives at the top of the file as module-level constants — change them, run it, done.
+3. **No private helpers hidden away.** Functions named `_foo` (leading underscore) are fine, but they sit *inline* in `main.py`, not in a separate module. The reader should not have to jump files.
+4. **No premature abstraction.** One task → one block of code. If the same 5 lines repeat, *write the 5 lines twice with a comment*, not a helper. Refactor only when there are 3+ occurrences or when extraction reveals a clearer name.
+5. **Config is data, not code.** Symbol, interval, date range, output directory are constants. No dict-driven config loader, no YAML, no `.env`.
+
+## File layout
+
+A typical `main.py` follows this order — top to bottom, no jumping around:
+
+```
+1.  Module docstring:  what this script does, what it produces, references.
+2.  Imports:           stdlib + third-party, grouped, no `from x import *`.
+3.  # Configuration:    all tunable constants in one block, each on its own line.
+4.  # Endpoints:        URLs, API constants, pagination knobs.
+5.  # Helpers:          small functions, each with a docstring of 1–3 lines.
+6.  # Pipeline:         the actual work, step-by-step, with comments.
+7.  if __name__ == "__main__": main()
+```
+
+Numbers 1, 3, and 6 are mandatory. Numbers 2, 4, 5, 7 are conventional but flexible.
+
+## What goes where
+
+### ✅ DO
+
+```python
+# Configuration — change these and re-run.
+SYMBOL = "BTCUSDT"
+INTERVAL = "1h"
+START = "2020-01-01 00:00:00"
+END = "2024-12-31 23:59:59"
+OUTPUT_DIR = "data"
+
+def load_klines(symbol, start, end, interval=INTERVAL):
+    """Fetch klines and return a tidy UTC DataFrame."""
+    ...
+
+if __name__ == "__main__":
+    df = load_klines(SYMBOL, START, END, INTERVAL)
+    df.to_csv(...)
+```
+
+- Constants at the top, in `UPPER_SNAKE_CASE`, with a `# Configuration:` banner.
+- Each helper has a 1–3 line docstring. No need for `Args:` / `Returns:` / `Raises:` Google-style blocks.
+- Inline comments are encouraged — explain *why*, not *what*.
+- Use `print()` for progress. No `logging` setup.
+- Use plain `try / except` with a short message. No custom exception classes.
+- Pagination loops, retries, etc. live in `main.py` as inline code with comments, not as a hidden utility.
+
+### ❌ DON'T
+
+- No `argparse.ArgumentParser` — kills readability, hides config from the reader.
+- No `Final` constants for *tunable* params. `Final` is for genuinely fixed values (URLs, API limits). Use plain `UPPER_SNAKE_CASE` for things the author may tweak.
+- No `@dataclass Config` — that's a parser in disguise.
+- No logging framework. `print(f"[fetch] {symbol}")` is fine.
+- No `logging.Logger("main")`. The reader should see the messages directly in the code path.
+- No `__all__`, no `__version__`, no entry-point decorator.
+- No `setup.py` / `setup.cfg` / `pyproject.toml` `[project.scripts]` registering `main` as a console_script.
+- No `if __name__ == "__main__": sys.exit(main())` exit-code ceremony. `main()` is the last thing; if it raises, the traceback is the message.
+- No type-hint bloat. Type hints are welcome on function signatures but skip them for local variables, especially `i, j, k` loop counters.
+- No `pathlib` ceremony. `Path` is fine; don't wrap every path operation in a helper.
+
+## When this rule yields to others
+
+This rule overrides parts of `03-code-quality.mdc` and `06-performance.mdc` *only* for `main.py`:
+
+| Concern | Default (rules 03/06) | `main.py` exception |
+|---|---|---|
+| `argparse` for CLI | discouraged in research code | **forbidden** in `main.py` |
+| DRY (don't repeat yourself) | required | **suspend** until 3+ occurrences |
+| Type hints on locals | encouraged | optional |
+| Vectorize Python loops | strongly encouraged | loops are fine if commented |
+| Custom exceptions | encouraged | use built-ins, plain messages |
+| `logging` module | discouraged in research | **forbidden** in `main.py` |
+
+If `main.py` starts to need real engineering (tests, packaging, multiple users), graduate it into a module: move helpers to `data/loader.py`, config to `config.py`, CLI to `cli.py`. The new files return to default rules.
+
+## Checklist before committing `main.py`
+
+- [ ] The first 30 lines tell the reader everything they need to know.
+- [ ] No `argparse`, no `click`, no `typer`, no `sys.argv`.
+- [ ] All knobs are constants in a `# Configuration:` block near the top.
+- [ ] No hidden helper module; the file is self-contained.
+- [ ] Comments explain *why*, not *what*.
+- [ ] `python main.py` runs end-to-end without flags.

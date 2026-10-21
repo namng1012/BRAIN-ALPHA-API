@@ -1,0 +1,71 @@
+---
+description: Tooling — uv replaces pip; always run scripts via `uv run`
+alwaysApply: true
+---
+
+# Tooling: uv
+
+This project uses **[uv](https://docs.astral.sh/uv/)** as its package manager. `pip`, `python -m pip`, `poetry`, `pipenv`, and `pdm` are not used. All scripts and entry points must be launched through `uv` so the lockfile, the resolved index, and the pinned Python interpreter are honored.
+
+## Always
+
+- `uv run <script>` — run any script or module inside the project environment.
+- `uv run pytest` — run tests.
+- `uv run python -c "..."` — for one-liners.
+- `uv add <pkg>` — add a runtime dependency (updates `pyproject.toml` + `uv.lock`).
+- `uv add --dev <pkg>` — add a dev dependency.
+- `uv sync` — reconcile the local environment to `uv.lock` (run after pulling).
+- `uv lock` — refresh `uv.lock` after editing `pyproject.toml` by hand.
+- `uv pip list` — inspect installed packages.
+
+## Never
+
+- `pip install ...` directly — bypasses the lockfile and breaks reproducibility.
+- `python script.py` or `python -m module` without `uv run` — uses the system interpreter, not the locked one.
+- Mixing `poetry`, `pipenv`, or `pdm` — only one package manager per project.
+- Editing `uv.lock` by hand — regenerate with `uv lock`.
+
+## Reproducibility rules
+
+- **`uv.lock` is committed.** It is the source of truth for reproducible environments.
+- **`requires-python`** is pinned in `pyproject.toml` (e.g. `requires-python = ">=3.11,<3.13"`).
+- **First clone** → run `uv sync` before doing anything else. Do not assume the env exists.
+- **CI** → use `uv sync --frozen --no-cache` so the lockfile is honored exactly.
+- **Pre-commit / hooks** → install with `uv run pre-commit install`, not `pip install pre-commit`.
+
+## Index and CUDA builds
+
+- When a dependency needs a special index (e.g. PyTorch CUDA wheels), configure it under `[tool.uv.sources]` in `pyproject.toml` with a `sys_platform` marker:
+
+  ```toml
+  [tool.uv.sources]
+  torch = [
+      { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+      { index = "pypi" },
+  ]
+  ```
+
+- Never commit `.venv/` or `__pycache__/`. Both are gitignored by convention.
+
+## When uv is unavailable
+
+- On a machine without `uv` (rare), install it first:
+
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+
+- Do not fall back to `pip install -r requirements.txt`. There is no `requirements.txt` and intentionally none — the lockfile is `uv.lock`.
+
+## Quick reference
+
+| Task | Command |
+|---|---|
+| Run a script | `uv run script.py` |
+| Run a module | `uv run -m pkg.module` |
+| Add a dependency | `uv add numpy` |
+| Add a dev dependency | `uv add --dev pytest` |
+| Refresh env after pull | `uv sync` |
+| Regenerate lockfile | `uv lock` |
+| Inspect env | `uv pip list` |
+| Update one package | `uv add <pkg>@latest` |

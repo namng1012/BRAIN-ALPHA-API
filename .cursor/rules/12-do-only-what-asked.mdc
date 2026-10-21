@@ -1,0 +1,81 @@
+---
+description: Do only what is asked — no over-engineering, no expansion, code must stay readable
+alwaysApply: true
+---
+
+# Rule 12 — Do Only What Is Asked
+
+This is the **default priority** for any task that does not fall under a more specific rule (see Precedence below).
+
+## Precedence (highest → lowest)
+
+1. **Correctness rules** — Rule 04 (scientific-ml) and Rule 09 (research-paper): scientific and mathematical correctness outranks scope minimalism.
+2. **Safety rules** — Rule 13 (no silent control flow): never silently swallow errors or invent fallbacks.
+3. **Style rules for output** — Rule 15 (no yapping) > Rule 07 (output format) > this rule.
+4. **Scope rules** — this rule (12): "do only what is asked" is the default for *new* work.
+5. **Logging rules** — Rule 14 (diary): requires an opt-in trigger; without it, no diary entry.
+
+When two rules conflict, the higher-precedence rule wins for its specific domain. When in doubt, name the conflict and ask the user.
+
+## Core principle
+
+**Do exactly what the user asked. Nothing more.**
+
+If the user says "load BTC", return BTC. Do not also: validate the file, compute statistics, send a webhook, update a database, log to a file, print a summary table, or write tests. Those would be expansions of scope.
+
+If unsure whether to add something, **don't**.
+
+## What "over-engineering" looks like
+
+Stop and reconsider if you catch yourself doing any of these:
+
+- **Adding helpers for code used once.** Inline it.
+- **Splitting one logical task across multiple functions.** One function per task is fine; one function per step inside a task is fragmentation.
+- **Creating a new file when the code fits in an existing one.**
+- **Adding configuration knobs nobody asked for.** Hard-code the values; the user can change them later if needed.
+- **Adding error handling for cases that cannot occur.** Trust the user's input.
+- **Adding type hints, docstrings, or comments that restate the obvious.** The code is the documentation.
+- **Wrapping a library call in a custom abstraction** when one line of that library would do.
+- **Writing "future-proof" abstractions** (abstract base classes, factories, dependency injection) for code that has one user.
+- **Adding a CLI parser, config file, or environment-variable loader** when the user can edit a constant.
+- **Re-organising files the user didn't ask to touch.**
+
+## What "readable and easy to edit" looks like
+
+The user must be able to open a file, find the part they care about in seconds, and change it without tracing through three layers of indirection.
+
+Concretely:
+
+- **Flat beats nested.** Two-level deep is usually fine. Three-level deep is usually a smell.
+- **Top-to-bottom reads top-to-bottom.** The file should not require jumping to read it linearly.
+- **Names should describe the value, not the type.** `rows` not `rows_list`; `price` not `price_float`.
+- **Constants live where they are used.** Move them up only if they are referenced in 3+ places.
+- **Comments say why, never what.** If the code does `x + 1`, do not write `# add one`.
+- **No "while we're here" edits.** Touch only the file(s) the user named.
+
+## Before you finish any task, audit yourself
+
+Ask:
+
+1. Did I write code the user did not ask for?
+2. Could I delete any function, class, file, or comment I added without the user noticing?
+3. Is there a layer of indirection that exists only because I wanted to be "clean"?
+4. Did I touch files outside the scope of the request?
+
+If any answer is *yes*, remove that work before reporting back.
+
+## This rule applies to
+
+- Every file edit, every new file, every refactor.
+- Including rule files themselves (this one included).
+- Including the response: keep it proportional, no padding.
+
+## This rule does NOT mean
+
+- "Skip rule 04 (preserve math correctness)" — if the user asks for a sum, compute the correct sum, not a wrong one to save lines.
+- "Skip rule 09 (publication-grade code)" — but interpret it as *minimum* publication-grade, not maximum. A clean comment is fine; a comment block citing five papers is not, unless the user asked for citations.
+- "Don't refactor when asked." If the user explicitly says "refactor", refactor — but only what they asked.
+
+## Exception: pipeline changes go in main()
+
+When the user asks to add, remove, or modify anything in `main.py`, wire it into `main()` directly. `main()` is the single entry point of the pipeline — do not introduce a separate runner, dispatcher, CLI wrapper, or orchestration layer to host the change.

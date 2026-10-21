@@ -1,0 +1,32 @@
+---
+description: Performance rules — vectorize first, scale when justified, no premature optimization
+alwaysApply: true
+---
+
+# Performance Rules
+
+## Priority order
+
+1. **Vectorized tensor operations** — primary path; always seek this first.
+2. **GPU acceleration** — when computation is GPU-bound and PyTorch CUDA is available.
+3. **Batch processing** — group independent work into batches.
+4. **Multiprocessing / joblib / distributed** — only when vectorization is exhausted and wall time justifies the complexity.
+
+## Anti-patterns
+
+- Python `for` loops over tensor elements that can be vectorized.
+- `.item()` calls inside training loops (forces GPU↔CPU sync).
+- Repeated allocation of the same tensor inside a loop.
+- Multiprocessing Pool created inside a loop (single pool, reused).
+- Sending large objects (DataFrames, full datasets) through task args.
+
+## Constraints
+
+- Do not introduce CUDA / multi-GPU / distributed training complexity unless the workload actually requires it.
+- Do not introduce multiprocessing unless the task is independent, chunkable, and total time justifies it.
+- Vectorization with NumPy / PyTorch is the simplest and usually the fastest option — always try it before reaching for parallelism.
+
+## When uncertain
+
+- Profile first, optimize second.
+- If the current implementation already runs in acceptable time, do not change it.

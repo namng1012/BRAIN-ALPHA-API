@@ -1,0 +1,167 @@
+---
+description: Diary logging — 3 files in Diary/ by category (conversation / code-technique / methodology); sentiment scale 1-10, log entries with score ≥ 6
+alwaysApply: true
+---
+
+# Rule 14 — Diary Logging
+
+The agent maintains a persistent research diary in `Diary/`. There are **three separate files**, one per category. Each entry is rated on a **sentiment score 1–10** before it is written; only entries with score **≥ 6** land in a file.
+
+## The three files
+
+```
+Diary/
+├── README.md
+├── conversation-log.md   # all chat-level summaries, conversation logs
+├── code-technique.md     # notable coding patterns, reusable tricks, fixes
+└── methodology.md        # paper-worthy scientific decisions
+```
+
+Each file is **append-only**. Entries are sorted by timestamp (oldest at top, newest at bottom).
+
+### File scope
+
+| File | Contains | Does NOT contain |
+|---|---|---|
+| `conversation-log.md` | chat summaries, what the user asked, outcome, files touched, open questions | code patterns, scientific rationale |
+| `code-technique.md` | reusable coding patterns, non-trivial fixes, helper functions, slicing tricks, dataloader layouts | chat narrative, paper decisions |
+| `methodology.md` | data split policy, leakage, normalization, walk-forward layout, sample-size derivation, validation strategy, evaluation protocol | code style, chat chatter |
+
+One item may produce **two or three** entries (one per file) if it has content in multiple categories — they get **the same timestamp** but different `kind:` tags.
+
+## Sentiment score 1–10
+
+The agent rates each candidate entry **before writing**. The score combines novelty, defensibility, and paper-impact.
+
+### Scale
+
+| Score | Meaning | Action |
+|---|---|---|
+| 1–3 | Trivial, routine, restates existing knowledge | **Skip — do not write** |
+| 4–5 | Mildly useful but obvious in hindsight | **Skip — do not write** |
+| 6 | Solid pattern, defensible choice, worth one line in the paper | **Write** |
+| 7–8 | Non-trivial, reviewer would ask about it | **Write** |
+| 9–10 | Cross-cutting, affects a reported number, novel for this codebase | **Write, flag to user in chat** |
+
+### How to score
+
+Ask in order:
+
+1. **Would a reviewer ask about this in peer review?** +3 if yes.
+2. **Is this non-obvious from the diff alone?** +2 if yes (e.g. snap-via-searchsorted is non-obvious; renaming a variable is obvious).
+3. **Would I want to cite this entry in a paper footnote?** +2 if yes.
+4. **Is this reusable in another module / another paper?** +2 if yes.
+5. **Did this prevent a silent bug or silent leak?** +1 if yes.
+
+Total → 1–10. Below 6 → skip.
+
+Examples from this codebase (calibration set):
+
+| Item | Score | Rationale |
+|---|---|---|
+| `_snap` helper for integer-position slicing | **7** | Reviewer question: "why not `df.loc[t1:t2]`?"; non-obvious; reusable |
+| Drop validation set → IS/OS only | **8** | Affects reported results; defensible via quant convention; reviewer would ask |
+| Add a `print("done")` at end of script | **2** | Routine, no paper impact |
+| Rename `train_hours` → `train_rows` | **3** | Obvious from diff |
+| `MIN_TRAIN_HOURS` floor + `min(...)` switch | **7** | Bug-prevention (0 folds), non-obvious, reusable |
+| Chat-summary for "fix the drift" turn | **6** | Useful as breadcrumb, but mostly narrative |
+
+## Triggers
+
+The agent writes diary entries when **any** of these fires:
+
+1. **End of an assistant turn where the agent decided something was noteworthy.** Score it; if ≥ 6, append to the matching file(s).
+2. **User says** "save diary", "ghi diary", "log this", "remember this" → write a chat-summary entry for the session.
+3. **End of chat session** → write a final chat-summary entry covering the whole session, regardless of score (session is the unit, not the turn).
+
+The agent does **not** wait for the user to ask. After every assistant turn, it self-scores and writes ≥ 6 items.
+
+## File format
+
+Each file uses the same template. Entries are separated by a blank line.
+
+### `conversation-log.md`
+
+````markdown
+## 2026-09-20T10:06:00Z | chat-summary | score: 6
+
+**Request:** <user's exact phrasing, ≤ 2 sentences>
+
+**Outcome:** <what was done / what changed, ≤ 3 sentences>
+
+**Files touched:** <one per line>
+
+**Open questions:** <or "none">
+
+**Sentiment:** 6 — solid breadcrumb for replaying the session.
+```
+
+### `code-technique.md`
+
+````markdown
+## 2026-09-20T10:06:00Z | code-technique | score: 7
+
+**Where:** <file:line-range, or function name>
+
+**Pattern:** <one-line name>
+
+**Why:** <what problem it solves, what bug it prevented>
+
+**Reusable in:** <other modules where the same pattern should apply>
+
+**Sentiment:** 7 — non-obvious, reviewer would ask why not `df.loc[t1:t2]`.
+```
+
+### `methodology.md`
+
+````markdown
+## 2026-09-20T10:06:00Z | methodology | score: 8
+
+**Decision:** <the choice that was made>
+
+**Alternatives considered:** <list, one per line, with one-line reason each>
+
+**Rationale:** <why this choice, citing domain convention when relevant>
+
+**Impact on reported results:** <what changes if a reviewer asks us to flip this>
+
+**Sentiment:** 8 — affects IS/OS numbers, defensible via quant convention.
+```
+````
+
+### Header format
+
+Every entry header is one line:
+
+```
+## <ISO-8601 UTC> | <kind> | score: <1-10>
+```
+
+`<kind>` ∈ {`chat-summary`, `code-technique`, `methodology`}. One timestamp per entry, never reused in the same file — append `Z.1`, `Z.2` if two land in the same second.
+
+### Long-conversation summary rule
+
+If a single chat session is **> 20 turns** OR **> 30 minutes**, the agent also writes a **compressed chat-summary** entry every ~20 turns / ~30 min, not just at the end. Each compressed entry covers the span since the previous summary. The score is the **max** of the underlying items.
+
+## Timestamps
+
+- **UTC**, ISO 8601, second precision: `YYYY-MM-DDTHH:MM:SSZ`.
+- Source: `<system_reminder>` or `date -u +%FT%TZ`. Never invented.
+
+## Conflict resolution
+
+- Rule 12 (do only what's asked): diary writing is **explicit user opt-in or paper-noteworthy**, not silent expansion.
+- Rule 15 (no yapping): diary entries may be longer than chat prose because they are research logs; chat prose stays short.
+- If the user says "không ghi diary" / "don't write diary", skip diary writes for the rest of the session.
+
+## What NEVER gets logged
+
+- Items with sentiment < 6.
+- Raw tool output, file contents, long code snippets (point to file:line instead).
+- The user's PII, API keys, paths under `~/.cursor/`.
+- Anything the user said to keep private.
+- Self-congratulation, restated code, filler.
+
+## Migration from old single-file layout
+
+The previous single `Diary/<chat-id>.md` file is **deprecated**. Entries already in the old file should be moved into the appropriate new file (conversation-log.md / code-technique.md / methodology.md) by kind, preserving their original timestamps. The old file is kept read-only for history.

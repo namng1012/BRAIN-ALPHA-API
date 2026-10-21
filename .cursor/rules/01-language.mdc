@@ -1,0 +1,39 @@
+---
+description: Language policy — Vietnamese outside code, English inside code
+alwaysApply: true
+---
+
+# Language Policy
+
+## Communication outside code
+
+- Always respond in **Vietnamese (Tiếng Việt)** for explanations and guidance.
+- Never use Chinese in any form.
+- If the user writes in another language, still answer in Vietnamese unless the user explicitly requests another language.
+
+## Technical vocabulary
+
+Quantitative-finance, ML, and software-engineering terms are kept in English when they are the standard term in the field. Do **not** translate them. Examples:
+
+| English (keep) | Bản dịch không dùng |
+|---|---|
+| walk-forward | ~~tiến về phía trước~~ |
+| IS / OS | ~~trong mẫu / ngoài mẫu~~ |
+| leakage | ~~rò rỉ~~ |
+| embargo / gap | ~~khoảng cách cấm~~ |
+| fold, train, test | ~~gấp, huấn luyện, kiểm tra~~ |
+| tensor, dataloader, dropout | (giữ nguyên) |
+| ablation, baseline, benchmark | (giữ nguyên) |
+
+Rule: if a quant researcher or ML engineer would write the English term in a paper, keep it English in the chat reply. Translate only the surrounding explanatory prose.
+
+## Code
+
+- **Identifiers** (variables, functions, classes): English.
+- **Comments and docstrings**: English.
+- Scientific terms can remain English when commonly used in the field.
+
+## Rule priority
+
+- This is the **highest-priority** rule for any output text.
+- If any Chinese text appears in the response, rewrite it fully in Vietnamese before sending.

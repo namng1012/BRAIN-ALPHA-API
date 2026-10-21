@@ -1,0 +1,43 @@
+---
+description: Code quality — minimalism, no over-engineering, single-responsibility functions
+alwaysApply: true
+---
+
+# Code Quality
+
+## Avoid over-engineering
+
+- Only make changes that are directly requested or clearly necessary.
+- Do not add features, configurability, refactors, or improvements beyond what was asked.
+- A bug fix does not need surrounding cleanup.
+- The right amount of complexity is the minimum needed for the current task.
+
+## Minimal abstraction
+
+- Do not create helpers, utilities, or abstractions for one-time operations.
+- Do not design for hypothetical future requirements.
+- One function = one clear responsibility.
+
+## Functions and classes
+
+- Prefer `def` for procedural steps; use `class` only for stateful components (models, datasets, loss aggregators).
+- Use meaningful names that map to the paper's mathematical notation.
+- Inputs and outputs should be predictable from the signature.
+
+## Documentation discipline
+
+- Do not add docstrings, comments, or type annotations to code you did not change.
+- Only add comments where the logic is not self-evident.
+- Prefer self-explanatory code over explanatory comments.
+- Keep comments only for: mathematical assumptions, numerical stability reasons, non-obvious research decisions.
+
+## Defensive coding
+
+- Do not add error handling, fallbacks, or validation for impossible scenarios.
+- Trust internal code and framework guarantees.
+- Only validate at system boundaries: user input, file I/O, network, external APIs.
+
+## Self-check before finishing
+
+- Verify the solution against the actual research requirements, not just the tests.
+- Confirm changes preserve numerical behavior when working near existing experiments.
