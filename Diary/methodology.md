@@ -71,3 +71,47 @@
 **Impact on reported results:** Bảng kết quả phải kèm cột mô tả frame (eligible count, filter đã dùng). Claim "random 3 field" chỉ có nghĩa cùng với claim "random 3 field trong frame F", và F phải được nêu.
 
 **Sentiment:** 7 — this is the "sampling frame" question every reviewer of an empirical paper asks first.
+
+## 2026-10-22T06:42:00Z | methodology | score: 8
+
+**Decision:** Với câu hỏi "khi `valueScore` tăng/giảm thì có gì thay đổi", **đo theo từng nhóm `valueScore` (bảng mean-per-level + crosstab) thay vì suy đoán định nghĩa**. Vì `valueScore` là biến phân loại thứ tự 1–7 và chỉ có 1 quan sát ở mức 7, không dùng được hồi quy tuyến tính.
+
+**Alternatives considered:**
+- Suy đoán từ tên + tài liệu chính thức — rejected: BRAIN không publish định nghĩa `valueScore`, sẽ ra khẳng định không nền tảng.
+- Chỉ báo cáo Pearson — rejected: che mất quan hệ phi tuyến; kết quả cho thấy nhánh "giảm" mạnh hơn nhánh "tăng", Pearson không nắm được.
+- OLS trên 286 điểm — rejected: `alphaCount` cực lệch (5.6M vs 6), residuals vi phạm giả định. Đã log1p trước khi so sánh.
+
+**Rationale:** Cách trung tính nhất là chỉ báo cáo cái quan sát được, không gán nhãn cơ chế khi chưa có bằng chứng — dạng "describe before you explain".
+
+**Impact on reported results:** Nếu ai dùng `valueScore` như proxy "chất lượng dataset", kết quả này **phủ nhận** cách hiểu đó: `valueScore` cao gắn với dataset *ít* dùng hơn, *nhỏ* hơn, độ phủ *thấp* hơn; nhưng lại gắn với `pyramidMultiplier` cao hơn và được cập nhật gần đây hơn. Chưa kết luận được "mới" vs "tốt" — cần dữ liệu theo thời gian mới tách được.
+
+**Kết quả đo (286 dataset, `EQUITY/USA/1/TOP3000`):**
+
+| valueScore | n | pyramidMultiplier | coverage | fieldCount | alphaCount (median) | vector_share | updated 6 tháng |
+|---|---|---|---|---|---|---|---|
+| 1 | 56 | 1.159 | 0.800 | 363 | 13 340 | 0.285 | 0.66 |
+| 2 | 64 | 1.208 | 0.844 | 305 | 2 502 | 0.315 | 0.58 |
+| 3 | 70 | 1.239 | 0.797 | 237 | 501 | 0.358 | 0.63 |
+| 4 | 48 | 1.248 | 0.762 | 253 | 176 | 0.401 | 0.75 |
+| 5 | 33 | 1.364 | 0.730 | 175 | 74 | 0.617 | 0.82 |
+| 6 | 14 | 1.350 | 0.726 | 111 | 47 | 0.458 | 0.93 |
+| 7 | 1 | 1.400 | 0.438 | 8 | 6 | 1.000 | 1.00 |
+
+Tổng `alphaCount` toàn scope: vs=1 → 5 609 938; vs=7 → 6. `pyramidMultiplier` **lồng nhau** theo `valueScore` (vs=1 có đủ 5 mức 1.0–1.4; vs=7 chỉ 1.4) → không phải hàm xác định của nhau.
+
+**Sentiment:** 8 — đảo ngược cách hiểu mặc định về `valueScore`, ảnh hưởng trực tiếp tới cách chọn dataset cho mọi experiment sau này.
+
+## 2026-10-22T07:20:00Z | methodology | score: 7
+
+**Decision:** Hạ `RELOGIN_THRESHOLD_SECONDS` từ 2000 xuống **1000** (≈ 17 phút) trong `Functions/login.py`.
+
+**Alternatives considered:**
+- Giữ 2000s như `ace_lib.check_session_and_relogin` — rejected: đệm 33 phút là quá nhiều so với thời lượng quan sát thực tế của một lần chạy, và mỗi lần login đều tiêu tốn quota (5 lần/phút, 25 lần/ngày theo Persona).
+- Suy ra threshold động từ `X-RateLimit-Remaining-*` header — rejected: header này báo rate limit của endpoint, không phải thời hạn session; hai khái niệm khác nhau.
+- Bỏ `check_login()` live probe, chỉ so timestamp cache — rejected: `exp` trong JWT không cùng clock với session expiry phía server (đã loại ở entry 2026-10-21).
+
+**Rationale:** Ngưỡng phải lớn hơn thời lượng tối đa của một lần chạy để không bao giờ thấy session chết giữa chừng. Quan sát được trong log: các lần chạy `main.py` kéo dài vài phút, session còn sống 1300–13700 s. 1000 s giữ được đệm ~17 phút — đủ cho một lần chạy thực tế — đồng thời giảm số lần phải login lại so với 2000 s. Đây là hằng số *vận hành*, không ảnh hưởng bất kỳ con số báo cáo nào.
+
+**Impact on reported results:** None. Tác động duy nhất là số lần persona flow được kích hoạt. Với ngưỡng 1000 s, một run bắt đầu cách lần login gần nhất hơn ~17 phút sẽ login lại (trước đây là ~33 phút).
+
+**Sentiment:** 7 — thay đổi nhỏ nhưng cần được nêu trong paper vì nó quyết định số lần chạy có thể thực hiện trong một ngày mà không bị khóa account.

@@ -9,9 +9,13 @@ from dotenv import load_dotenv
 
 BRAIN_API_URL = os.environ.get("BRAIN_API_URL", "https://api.worldquantbrain.com")
 
-# Same guard as ace_lib.check_session_and_relogin: re-auth before the session
-# dies rather than after, so a dead session is never observed mid-run.
-RELOGIN_THRESHOLD_SECONDS = 2000
+# Re-auth before the session dies rather than after, so a dead session is never
+# observed mid-run. The pattern is the one in ace_lib.check_session_and_relogin,
+# but the constant is lower than its 2000s: 1000s (~17 min) is the margin a
+# single run gets guaranteed before the token can expire, which trades a
+# guaranteed 17-minute window for fewer logins against the 5-logins/minute and
+# 25-logins/day limits.
+RELOGIN_THRESHOLD_SECONDS = 1000
 
 # Persona verification is completed in the browser; the script polls the
 # inquiry endpoint instead of waiting for a keypress.

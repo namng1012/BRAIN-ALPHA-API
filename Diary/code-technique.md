@@ -140,3 +140,45 @@
 **Impact on reported results:** Hai bảng kết quả riêng, không gộp; mọi claim về "random feature" phải kèm phương án lấy mẫu đã dùng. Nếu chỉ chạy A và bỏ D, claim "3 feature độc lập" không đứng được.
 
 **Sentiment:** 7 — this is the difference between a defensible null baseline and a reviewer-obvious design flaw.
+
+## 2026-10-22T04:25:00Z | code-technique | score: 7
+
+**Where:** `Functions/data.py` — `BrainData._get`; `sweep_scopes.py`
+
+**Pattern:** Retry-on-non-JSON trong `_get`, và phải suy ra `universe` hợp lệ từ `combinations()` chứ không hardcode
+
+**Why:** (1) Rate limit tính theo *giây* trên toàn session, nên request liên tiếp có thể nhận body HTML; `r.json()` raise `JSONDecodeError`. Bọc `for attempt in range(GET_MAX_ATTEMPTS)` với `except requests.exceptions.JSONDecodeError` → sleep → thử lại, giữ nguyên hành vi cũ (raise) khi hết attempt. Sau khi sửa, 61 request sweep chạy sạch. (2) Lần sweep đầu **âm thầm cho kết quả sai**: hardcode `universe="TOP3000"` cho mọi cặp `(region, delay)` → 13/17 cặp trả 0 field, tổng field chỉ 89 629 thay vì 125 753. `TOP3000` chỉ hợp lệ với USA; phải map `(region, delay) → universe` từ `combinations()`.
+
+**Bài học (generalise):** scope không hợp lệ **không** báo lỗi — API trả HTTP 200 với tập rỗng. Số 0 là tín hiệu của tham số sai, không phải "vùng dữ liệu trống". Khi fan-out catalog, luôn lấy giá trị tham số từ `OPTIONS` thay vì viết cứng.
+
+**Reusable in:** Mọi module gọi catalog; `sweep_scopes.py` là script đo baseline dùng lại được.
+
+**Sentiment:** 7 — lỗi "0 record" là loại bug im lặng tệ nhất: sweep vẫn chạy xong, vẫn in số liệu, nhưng số liệu sai 29 %.
+
+## 2026-10-22T04:25:00Z | methodology | score: 8
+
+**Decision:** Kích thước catalog toàn platform phải báo cáo là **số id duy nhất sau dedup** (441 dataset id, 125 753 field id), không phải tổng cộng theo scope (6 805 dataset-scope, 332 171 field-scope).
+
+**Alternatives considered:**
+- Báo tổng theo scope — rejected, đếm trùng 12–15 lần; con số 332 171 gây ấn tượng giả và sai về mặt khoa học.
+- Chỉ báo scope `USA/1/TOP3000` (286 dataset / 75 926 field) — insufficient, đây là 1 trong 44 scope hợp lệ và không đại diện platform.
+
+**Rationale:** "Có bao nhiêu data trên BRAIN" là một câu hỏi phải trả lời được ở cấp *catalog*, không phải cấp *scope*. `region` và `delay` cắt tập id gần như tách rời (Jaccard 0.239 giữa USA và GLB) nên cộng dồn theo scope đòi hỏi giả định overlap mà ta đo được chứ không giả định.
+
+**Impact on reported results:** Mọi claim về "toàn bộ data của BRAIN" trong paper phải ghi rõ: 441 dataset id, 125 753 field id, dedup theo `id` trên 17 cặp `(region, delay)` + 44 scope. Ứng dụng chỉ dùng 1 scope thì con số là 286/75 926, và phải nói rõ đó là phạm vi nghiên cứu chứ không phải giới hạn nền tảng.
+
+**Sentiment:** 8 — con số này sẽ xuất hiện trong abstract/intro; reviewer sẽ hỏi "platform-wide hay scope-specific?" và câu trả lời phải là con số dedup.
+
+## 2026-10-22T05:00:00Z | code-technique | score: 6
+
+**Where:** `main.py` — `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`
+
+**Pattern:** Re-encode stdout trước khi in text lớn chứa ký tự ngoài cp1252
+
+**Why:** `datasets.to_string()` với cột `fielddescriptions` sinh ~11 MB text có chứa `U+2011` (non-breaking hyphen). Trên Windows console mặc định cp1252, `print` raise `UnicodeEncodeError: 'charmap' codec can't encode character '\u2011' in position 10393792` — tức là crash **sau khi** toàn bộ API call đã xong, mất công. `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` ở đầu `main()` sửa cả hai vấn đề: encoding và ký tự thay thế.
+
+**Bài học (generalise):** trên Windows, bất kỳ code nào in text tải từ API có thể gặp ký tự ngoài cp1252 thì phải re-encode stdout **trước** khi in, không phải sửa sau khi đã crash. `errors="replace"` biến ký tự lạ thành `?` thay vì abort cả job.
+
+**Reusable in:** Mọi entry point in dữ liệu thô ra stdout; `sweep_scopes.py` hiện chỉ in số đếm nên chưa cần, nhưng nếu in danh sách field thì cần.
+
+**Sentiment:** 6 — lỗi môi trường đặc thù Windows, không phải vấn đề khoa học, nhưng chặn cả pipeline.

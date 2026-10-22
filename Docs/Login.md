@@ -116,9 +116,11 @@ Lần sau `load_session()` dựng lại `requests.Session` từ cookie cache.
 
 ### 4.4 Ngưỡng re-login trước khi session chết
 
-`RELOGIN_THRESHOLD_SECONDS = 2000` (~33 phút): session còn sống ≥ ngưỡng này thì tái dùng, ngược lại login mới.
+`RELOGIN_THRESHOLD_SECONDS = 1000` (~17 phút): session còn sống ≥ ngưỡng này thì tái dùng, ngược lại login mới.
 
 Logic: re-auth **trước khi** session chết, chứ không phải sau — để không bao giờ gặp session chết giữa lúc chạy (giống `ace_lib.check_session_and_relogin`).
+
+`ace_lib.check_session_and_relogin` dùng 2000s. Ngưỡng của dự án là **1000s** — thấp hơn, để giảm số lần login (giới hạn 5 lần/phút và 25 lần/ngày) trong khi vẫn giữ ≥ 17 phút đệm cho một lần chạy.
 
 `check_login()` bắt lỗi trả về `0` = coi như hết hạn → login lại.
 

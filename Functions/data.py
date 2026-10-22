@@ -6,6 +6,12 @@ import requests
 
 BRAIN_API_URL = "https://api.worldquantbrain.com"
 
+# The per-second rate limit is shared across the whole session, so a catalog GET
+# can return an HTML error body instead of JSON. Retry a non-JSON body a few
+# times before giving up.
+GET_MAX_ATTEMPTS = 5
+GET_RETRY_INTERVAL_SECONDS = 2
+
 
 def _flatten(obj: Any, prefix: str = "") -> dict:
     """Flatten nested dict/list values into `prefix_sub` columns."""
@@ -40,12 +46,22 @@ class BrainData:
         self.base_url = base_url
 
     def _get(self, url: str) -> dict:
-        """GET a catalog endpoint, respecting the per-second rate limit."""
-        while True:
+        """GET a catalog endpoint, respecting the per-second rate limit.
+
+        The rate limit is enforced per second across the whole session, so a
+        request can come back with an HTML error body instead of JSON. Retry
+        on a non-JSON body until the attempt budget is exhausted.
+        """
+        for attempt in range(1, GET_MAX_ATTEMPTS + 1):
             r = self.session.get(url)
             if int(r.headers.get("X-RateLimit-Remaining-Second", 1)) <= 1:
                 time.sleep(1)
-            return r.json()
+            try:
+                return r.json()
+            except requests.exceptions.JSONDecodeError:
+                if attempt == GET_MAX_ATTEMPTS:
+                    raise
+                time.sleep(GET_RETRY_INTERVAL_SECONDS)
 
     def settings(self) -> dict:
         """Return the valid simulation settings: instrumentType, region, delay, universe.
