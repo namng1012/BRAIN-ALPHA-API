@@ -266,3 +266,173 @@
 **Open questions:** Chưa có số liệu chính thức về độ dài session tối đa của BRAIN (chỉ quan sát 2337–13730 s trong log) — ngưỡng 1000 s là chọn có chủ ý, chưa dẫn xuất từ một spec. Cần xác nhận nếu có tài liệu.
 
 **Sentiment:** 6 — thay đổi nhỏ, vận hành, không ảnh hưởng số liệu.
+
+## 2026-10-22T08:27:00Z | chat-summary | score: 7
+
+**Request:** "bây giờ lưu bằng csv thực sự khá nặng nề, tôi muốn thử lưu bằng npz của python, chỉ load các idx cần thiết ra và toàn bộ cache sẽ lưu trong máy vật lý".
+
+**Outcome:** Thêm `Functions/cache.py` — cache catalog dạng columnar `.npz` (1 file / scope, 115 archive member, 4.4 MB cho 47 706 row × 19 cột, giảm từ ~41 MB JSON gốc). Mỗi cột × mỗi block 8192 row là **một member riêng** nên `np.load` giải nén lazy theo member. `ScopeCache.take(indices, columns)` gom row theo block rồi scatter về đúng thứ tự yêu cầu, và chỉ đọc đúng block × cột cần. `main.py` bỏ toàn bộ output CSV, thay bằng: ghi `.npz` + 3 file `eligible_{matrix,vector,group}.npy` (chỉ là **row position**, không phải bản copy của dữ liệu). `.gitignore` thêm `cache/`. CSV cũ đã xóa khỏi đĩa.
+
+**Files touched:**
+- `Functions/cache.py` (new — `save_cache`, `ScopeCache`, `frame_id`, `scope_key`)
+- `main.py` (bỏ CSV, thay bằng cache npz + eligible npy)
+- `.gitignore` (thêm `cache/`)
+- `Diary/conversation-log.md` (entry này)
+
+**Kết quả đo (Windows, nvme local):**
+- đọc 3 row × 19 cột: 168 ms · đọc 3 row × 4 cột: **12.2 ms** · full scan 47 706 row: 820 ms
+- → đọc có chọn lọc nhanh hơn full scan **66.9×**, nhanh hơn đọc đủ cột **13.7×**
+
+**Bugs đã phát hiện và sửa trong lúc test:**
+- `take()` trả về theo thứ tự index đã sort, không phải thứ tự yêu cầu → thêm inverse permutation (`restore`).
+- Round-trip đổi dtype (`str`→`object`, `bool`→`int8`, `int`→`float64`) → tách **hai** bản dtype: `numpy_dtypes` (bản ghi vào archive, pickle-free) và `pandas_dtypes` (bản khôi phục). Test round-trip nay `assert full.equals(frame)` — chính xác cả value lẫn dtype.
+
+**Open questions:** `CHUNK_ROWS = 8192` là hằng số đoán — chưa sweep để tìm điểm tối ưu giữa số member (overhead mỗi member) và lượng dữ liệu bị kéo theo. Chưa có `pytest` file chính thức (test đã xóa sau khi verify). Chưa quyết định cache có cần được re-fetch theo định kỳ (catalog có dòng chảy: 4 042 field mới trong 2026-04).
+
+**Sentiment:** 7 — kiến trúc cache đúng, có số đo chứng minh, nhưng chưa có test file trong repo và `CHUNK_ROWS` chưa được sweep.
+
+## 2026-10-22T08:53:00Z | chat-summary | score: 6
+
+**Request:** "tại sao ra tới 4 file npy doán lẽ chỉ nên có 3 file đại điện cho matrix vector group" → chọn phương án **split_npz**: 3 file `.npz`, mỗi type một file tự chứa.
+
+**Outcome:** Tái cấu trúc cache từ "1 npz + 3 npy rời" thành "3 npz, mỗi type một file":
+- `Functions/cache.py`: `save_cache(scope, frame, field_type, eligible, catalog_frame_id)` → file `{scope_key}_{type.lower()}.npz`; mỗi archive chứa snapshot **chưa lọc** của type đó + member `eligible` (row position) bên trong. Thêm `FIELD_TYPES = ("MATRIX", "VECTOR", "GROUP")`, property `ScopeCache.eligible`, `catalog_frame_id` trong metadata (hash chung của toàn catalog để biết 3 archive cùng snapshot).
+- `main.py`: lọc eligibility **sau** khi tách type, lưu kết quả vào member `eligible`; bỏ import `pandas` (không còn dùng).
+- Xóa 4 file cache của layout cũ.
+
+**Files touched:**
+- `Functions/cache.py` (tái cấu trúc `save_cache`, thêm `FIELD_TYPES`, `eligible`, `catalog_frame_id`)
+- `main.py` (vòng lặp 3 type, bỏ `pandas`)
+- `cache/EQUITY_USA_1_TOP3000_{matrix,vector,group}.npz` (regenerated)
+- `Diary/conversation-log.md` (entry này)
+
+**Kết quả chạy thật:** MATRIX 57 356 row / 36 854 eligible (64.3 %) / 4.8 MB · VECTOR 16 514 / 9 168 (55.5 %) / 1.7 MB · GROUP 2 041 / 1 670 (81.8 %) / 0.1 MB. Tổng eligible 47 692 / 75 926 (62.8 %) — khớp số cũ.
+
+**Lỗi logic đã phát hiện khi tái cấu trúc:** layout cũ cache `fields` **đã lọc coverage** rồi mới tính `eligible_idx` → tập eligible trùng toàn bộ. Layout mới cache snapshot **chưa lọc** rồi suy ra eligible local → đúng nguyên tắc "cache raw, lọc local" của `Docs/random-field-pipeline-proposal.md` §1.3.
+
+**Open questions:** 14 field `SYMBOL`/`UNIVERSE` vẫn không có archive riêng (bị bỏ qua vì không dùng làm alpha input) — nếu cần thì thêm type thứ 4. `CHUNK_ROWS = 8192` vẫn chưa sweep.
+
+**Sentiment:** 6 — sửa đúng cấu trúc theo yêu cầu và phát hiện kịp một lỗi logic (lọc 2 lần), nhưng chưa có test file trong repo.
+
+## 2026-10-22T09:03:00Z | chat-summary | score: 6
+
+**Request:** "tôi muốn lấy random 5 fieldid từ npz của mỗi data type" — chọn sample trong tập eligible, **không** seed cố định (mỗi lần chạy ra field khác nhau).
+
+**Outcome:** `main.py` — thay `cache.take(eligible_idx[:3])` bằng draw ngẫu nhiên 5 field từ `cache.eligible`: `picked = np.sort(rng.choice(eligible, size=min(5, eligible.size), replace=False))` rồi `cache.take(picked, columns=display_cols)`. `rng = np.random.default_rng()` không seed → mỗi lần chạy cho 5 field khác nhau trên mỗi type. Chạy thật: MATRIX 5 field từ 4 dataset khác nhau, VECTOR 5 field (fundamental72 chiếm 2 → trùng dataset), GROUP 5 field (3/5 từ `pv30`).
+
+**Files touched:**
+- `main.py` (random sample 5 thay first-3)
+- `Diary/conversation-log.md` (entry này)
+
+**Open questions:** Vì không seed, 5 field này **không tái lập được** — mỗi lần chạy ra tập khác, nên không dùng được làm frame nghiên cứu chính thức. Nếu chuyển sang experiment thật thì phải pin seed + ghi `catalog_frame_id` (`ddd38149`) vào log. Ngoài ra sample **phân bổ theo field** chứ không theo dataset → 5 field có thể rơi vào 2–3 dataset (đã thấy 2/5 trong cùng `fundamental72`, 3/5 trong `pv30`), tức 5 field có thể chỉ là 3 khái niệm độc lập — cân nhắc draw theo dataset.
+
+**Sentiment:** 6 — đúng yêu cầu, nhưng kết quả hiện tại chưa tái lập được nên chỉ dùng để khám phá, chưa dùng làm frame nghiên cứu.
+
+## 2026-10-22T09:09:00Z | chat-summary | score: 6
+
+**Request:** "tách `instrumentType: EQUITY` vì nó luôn cố định còn lại sẽ thay đổi" — bỏ `instrumentType` khỏi `scope`, chỉ giữ 3 thành phần thay đổi.
+
+**Outcome:** Verify từ `OPTIONS /simulations` rằng `instrumentType` chỉ có **đúng 1** giá trị (`EQUITY`) → coi là hằng số nền tảng, không phải tham số thí nghiệm.
+- `Functions/data.py`: thêm `INSTRUMENT_TYPE = "EQUITY"`; `_scope_query` chèn hằng số này thay vì đọc từ scope; `combinations()` yield scope 3 khoá (`region`, `delay`, `universe`) thay vì 4; `summary()` bỏ cột `instrumentType`.
+- `Functions/cache.py`: `scope_key` chỉ dùng `("region", "delay", "universe")` → tên file cache đổi `EQUITY_USA_1_TOP3000_*` → `USA_1_TOP3000_*`.
+- `main.py`: `scope = {"region": "USA", "delay": 1, "universe": "TOP3000"}`.
+- `Docs/data-description.md`: cập nhật snippet scope + giải thích vì sao `instrumentType` không nằm trong scope.
+- Xóa 3 file cache cũ theo tên key cũ.
+
+**Files touched:**
+- `Functions/data.py` (`INSTRUMENT_TYPE`, `_scope_query`, `combinations`, `summary`)
+- `Functions/cache.py` (`scope_key`)
+- `main.py` (scope 3 khoá)
+- `Docs/data-description.md` (§5 snippet)
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** `uv run main.py` chạy sạch, cùng số liệu (47 692 / 75 926 eligible, `catalog_frame_id=ddd38149`); `combinations()` vẫn yield **44** scope, key = `['delay', 'region', 'universe']`, không còn `instrumentType`.
+
+**Open questions:** `BrainData.settings()` vẫn trả cả 4 nhánh (cần `instrumentType` để đọc cây `OPTIONS`) — giữ nguyên vì đó là raw API shape, khác với scope dùng trong run. `Docs/random-field-pipeline-proposal.md` vẫn viết scope 4 thành phần — chưa đồng bộ, nhưng ở đó nó mô tả API contract chứ không mô tả scope dùng trong code.
+
+**Sentiment:** 6 — đơn giản hoá đúng chỗ, giảm 1 khoá khỏi mọi scope dict và khỏi tên file cache; có verify số liệu không đổi.
+
+## 2026-10-22T09:19:00Z | chat-summary | score: 6
+
+**Request:** "3 file npz nên lưu trong 1 folder tên là sự kết hợp giữa 3 đại lượng này vì trong tương gần sẽ phải thay đổi" — gom 3 file npz vào folder tên theo `region_delay_universe`.
+
+**Outcome:** `Functions/cache.py` — `save_cache` ghi vào `cache/{scope_key(scope)}/{type}.npz` thay vì `cache/{scope_key}_{type}.npz`; `scope_key` đổi docstring từ "filename key" thành "folder name". `main.py` — print đường dẫn tương đối `cache/{scope}/{file}` thay vì chỉ tên file (tên file giờ trùng nhau giữa các scope nên không đủ để nhận diện).
+
+**Files touched:**
+- `Functions/cache.py` (`save_cache` ghi vào scope folder)
+- `main.py` (print path đầy đủ)
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** `uv run main.py` chạy sạch, cache giờ là `cache/USA_1_TOP3000/{matrix,vector,group}.npz`, số liệu không đổi (47 692 / 75 926 eligible, `catalog_frame_id=ddd38149`). 3 file npz phẳng cũ đã xóa. `git diff --check` sạch.
+
+**Open questions:** `save_cache` vẫn luôn ghi đè file cùng tên trong folder scope — chưa có cơ chế "cache hit": chạy lại cùng scope vẫn tải lại toàn bộ catalog từ API (41 MB). Nếu catalog là mục tiêu động thì đây là chủ ý, nhưng nên cân nhắc `fetched_at` để quyết định re-fetch. `docs/data-description.md` chưa mô tả layout cache mới.
+
+**Sentiment:** 6 — cấu trúc cache giờ tự mô tả (folder = scope), nhưng vẫn thiếu cơ chế tái sử dụng cache.
+
+## 2026-10-22T09:22:00Z | chat-summary | score: 7
+
+**Request:** "thêm 1 ý nữa nếu folder đã tồn tại thì không save lại cache" — nếu folder scope đã có trên đĩa thì dùng lại snapshot, không tải lại catalog.
+
+**Outcome:**
+- `Functions/cache.py`: thêm `scope_dir()` và `cached_scope()` (trả `None` nếu thiếu bất kỳ type nào — scope phải all-or-nothing để không trộn snapshot mới với cũ). Bỏ member `eligible` khỏi archive; thay bằng `ScopeCache.eligible_positions(min_coverage)` suy ra từ cột raw `coverage`/`dateCoverage` → `MIN_COVERAGE` là tham số sống, đổi ngưỡng không cần tải lại. Thêm `ScopeCache.column()` để đọc nguyên một cột. `save_cache` nhận thêm `catalog_total` (tổng field của scope) và bỏ tham số `eligible`.
+- `main.py`: tách `fetch_scope(scope)` (login + tải + cache, trả `None` nếu login fail) khỏi `main()`; `main()` check `cached_scope(scope)` trước — hit thì bỏ qua login và tải lại.
+
+**Files touched:**
+- `Functions/cache.py` (`scope_dir`, `cached_scope`, `ScopeCache.column`, `ScopeCache.eligible_positions`, `save_cache` signature)
+- `main.py` (`fetch_scope` tách riêng, cache-hit path)
+- `Diary/conversation-log.md` (entry này)
+- `Diary/code-technique.md` (entry cache-hit pattern)
+
+**Verify:** Xóa `cache/` rồi chạy: 22.7 s, tải mới, đủ 3 npz. Chạy lần 2: 9.0 s, in `Cache hit for scope USA_1_TOP3000`, không login, số liệu **identical** (47 692 / 75 926 eligible, `catalog_frame_id=ddd38149`, 57 356 / 16 514 / 2 041 rows). `git diff --check` sạch.
+
+**Open questions:** Cache không có TTL — snapshot cũ vẫn được dùng vô thời hạn dù catalog là mục tiêu động; `fetched_at` đã lưu trong `meta` nên sau này thêm policy "re-fetch nếu cũ hơn N ngày" được, nhưng hiện chưa có yêu cầu nên chưa thêm. `catalog_total` lưu bằng `len(fields)` của catalog **chưa lọc theo type** — khớp 75 926, đúng với mẫu số của báo cáo cũ.
+
+**Sentiment:** 7 — biến 41 MB / 22.7 s thành 9.0 s, và quan trọng hơn là snapshot trở thành *pinned artifact* thay vì thứ bị ghi đè mỗi lần chạy.
+
+## 2026-10-22T09:51:00Z | chat-summary | score: 5
+
+**Request:** "`{"region": "USA", "delay": 0, "universe": "TOP3000"}` có bao nhiêu tổ hợp này ? hãy đừa vào file yaml" — hỏi số lượng của scope `USA/0/TOP3000`, yêu cầu không ghi kết quả ra file yaml.
+
+**Outcome:** Trả lời bằng số đo, không tạo file nào. (1) Số tổ hợp scope hợp lệ từ `OPTIONS /simulations`: tổng 44 scope; `USA` + `delay=0` có **6** universe (TOP3000, TOP2000, TOP1000, TOP500, TOP200, TOPSP500); USA cả delay 0 và 1 → 12 scope. (2) Số data field trong scope này, đọc từ cache `cache/USA_0_TOP3000/`: MATRIX 12 097 (eligible 6 498), VECTOR 4 371 (eligible 2 300), GROUP 159 (eligible 6), tổng catalog 16 636 / eligible 8 804 (52.9 %). Tổng 16 636 gồm thêm 8 `SYMBOL` + 1 `UNIVERSE` — không phải alpha input nên không cache.
+
+**Files touched:**
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** Đếm trực tiếp bằng `BrainData.combinations()` (live `OPTIONS` call) và `ScopeCache.eligible_positions(0.7)` trên cache có sẵn. Không sửa code.
+
+**Open questions:** Chưa rõ "tổ hợp" trong câu hỏi là *scope combination* hay *data field* — đã trả lời cả hai. Có thể hỏi lại nếu user chỉ cần một nghĩa.
+
+**Sentiment:** 5 — chỉ là số liệu tra cứu, không có thay đổi code hay quyết định khoa học mới.
+
+## 2026-10-22T09:20:00Z | chat-summary | score: 6
+
+**Request:** "tạo cho tôi 1 file yaml để chứa số lượng config của 3 đại lượng region delay và universe hãy check trong api trước / YÊU CẦU TẠP FILE YAML CHỨA CÁC CONFIG BẠN ĐỪNG TẠO SCRIPT" — tạo file YAML chứa config 3 đại lượng, kiểm tra API trước, không viết script.
+
+**Outcome:** Tạo `config/scopes.yaml` (chỉ 1 file YAML, không tạo script nào). Nội dung: block `counts` (12 region / 2 delay / 21 universe / 44 scope hợp lệ), danh sách `delays` (0, 1), cây `regions` → `delays` → `universes` với `n_scopes` mỗi region, và `universe_names` (21 tên distinct). Nguồn ghi trong header comment: `OPTIONS /simulations`, fetch lúc 2026-10-22T09:14Z.
+
+**Files touched:**
+- `config/scopes.yaml` (file mới)
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** Đọc live `OPTIONS /simulations` qua `BrainData.settings()` → dựng 44 combo từ cây YAML → so sánh sorted với `BrainData.combinations()`: **MATCH** (44 = 44, set bằng nhau). Tự nhất quán trong file: `sum(n_scopes) == 44`, số universe distinct trong cây == 21 == len(`universe_names`). File tạm `tmp_yaml_combos.json` đã xoá.
+
+**Open questions:** YAML là **snapshot** của scope space tại thời điểm fetch, còn API là nguồn sống — nếu platform thêm region/universe thì file phải cập nhật tay. Chưa có code nào đọc file này (user nói rõ không tạo script), nên nó hiện là tài liệu tham chiếu + input cho tương lai.
+
+**Sentiment:** 6 — số liệu đã verify khớp API từng cặp, nhưng chưa được pipeline dùng nên giá trị thực tại chưa phát sinh.
+
+## 2026-10-22T09:27:00Z | chat-summary | score: 7
+
+**Request:** "tôi không hài lòng về cái này lắm. giả sử tôi muốn random region sau đó là delay sau đó là universe thì yaml này không đáp ứng được" rồi "thay vì để như vậy hãy trình bày số lượng tổ hợp có thể có của các config này từ đó tôi chỉ cần random chọn các tổ hợp config này thôi" — bỏ cấu trúc cây, muốn file liệt kê sẵn các tổ hợp hợp lệ để chỉ cần random một tổ hợp.
+
+**Outcome:** `config/scopes.yaml` viết lại 2 lần trong turn này. (a) Bỏ region `ALL` + 3 universe `LARGE/MEDIUM/SMALL` theo yêu cầu → 41 scope còn lại. (b) Phát hiện quan trọng: tập universe của một region **giống nhau ở mọi delay** (verify trên cả 11 region) → cây lồng của API chỉ là artefact của settings widget, không phải dependency, nên cross product là đủ. (c) Bản cuối: key `scopes` là list 41 dict phẳng `{region, delay, universe}` + `scopes_by_region` (số scope mỗi region) + block `counts`. Sampling giờ là **một lần draw từ list**, mọi phần tử hợp lệ sẵn nên không cần validate sau draw.
+
+**Files touched:**
+- `config/scopes.yaml` (viết lại)
+- `Diary/conversation-log.md` (entry này)
+- `Diary/methodology.md` (entry loại bỏ `ALL`)
+
+**Verify:** 41 entry, 41 unique. `sum(scopes_by_region) == 41`, khớp `Counter(region)` trong list. Sorted set 41 scope trong YAML **MATCH** với `BrainData.combinations()` (loại `ALL`) từ live `OPTIONS /simulations`. `ALL` và `LARGE/MEDIUM/SMALL` không còn trong file. File tạm đã xoá.
+
+**Open questions:** Sampling đều trên 41 scope là **uniform trên scope**, không phải uniform trên region → USA chiếm 12/41 ≈ 29 % mẫu, KOR/IND mỗi region 1/41 ≈ 2.4 %. Nếu muốn uniform theo region thì cần draw 2 tầng, phải quyết định khi viết code. Chưa có code đọc file (user yêu cầu không tạo script).
+
+**Sentiment:** 7 — chuyển từ "mô tả cấu trúc API" sang "enum hợp lệ dùng được ngay", đúng thứ user cần; và phát hiện universe-set độc lập với delay là điều kiện để flatten mà không mất thông tin.

@@ -176,8 +176,10 @@ In ra: số dataset, số data field, danh sách cột, breakdown theo `type` v�
 Để đổi scope, sửa biến `scope` trong `main.py`:
 
 ```python
-scope = {"instrumentType": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+scope = {"region": "USA", "delay": 1, "universe": "TOP3000"}
 ```
+
+`instrumentType` không nằm trong `scope` vì `OPTIONS /simulations` chỉ publish **một** giá trị (`EQUITY`) — nó là hằng số nền tảng, đặt tại `Functions/data.py` (`INSTRUMENT_TYPE`) và được chèn tự động khi dựng query.
 
 Liệt kê toàn bộ scope hợp lệ:
 

@@ -182,3 +182,81 @@
 **Reusable in:** Mọi entry point in dữ liệu thô ra stdout; `sweep_scopes.py` hiện chỉ in số đếm nên chưa cần, nhưng nếu in danh sách field thì cần.
 
 **Sentiment:** 6 — lỗi môi trường đặc thù Windows, không phải vấn đề khoa học, nhưng chặn cả pipeline.
+
+## 2026-10-22T08:27:00Z | code-technique | score: 8
+
+**Where:** `Functions/cache.py` — `save_cache`, `ScopeCache.take`
+
+**Pattern:** Lưu table vào `.npz` theo lưới (cột × block) để đọc là lazy theo từng archive member, rồi trả về đúng thứ tự yêu cầu
+
+**Why:** `np.load` giải nén **mỗi member khi member đó được chạm tới**, không phải cả archive. Nên nếu mỗi (cột, block 8192 dòng) là một member riêng, thao tác "lấy 3 dòng ở 4 cột" chỉ nạp ≤ 12 member thay vì toàn bộ 115. Đo thật trên catalog 47 706 dòng × 19 cột (4.4 MB): đọc 3 dòng × 4 cột = **12.2 ms**, đọc 3 dòng × 19 cột = 168 ms, full scan = 820 ms → chọn lọc nhanh hơn full scan 66.9×.
+
+Hai lỗi phải sửa khi làm:
+1. **Thứ tự**: gom dòng theo block rồi phải scatter về thứ tự gọi — cần `restore = np.argsort(order)` với `order = np.argsort(idx)`. Thiếu bước này trả về đúng *dữ liệu* nhưng sai *thứ tự*, và test bằng `frame.iloc[idx].equals(...)` mới bắt được.
+2. **dtype**: một bản dtype không đủ. `numpy_dtypes` (bản ghi vào archive, dùng `U`/`int8`/`float64` để **không cần pickle**, nên `allow_pickle=False` vẫn hợp lệ) khác `pandas_dtypes` (bản khôi phục, phải trả về `str`/`bool`/`int64` gốc). Lưu 1 bản → round-trip đổi `str`→`object`, `bool`→`int8`, `int`→`float64`.
+
+**Bài học (generalise):** format "phẳng" một cột (CSV) buộc phải parse toàn bộ file để biết record nào ở dòng nào. Format lưu trữ theo *block* + *lazy member* biến "đọc vài dòng" thành thao tác O(cột cần × block chạm), và quan trọng hơn là **giữ được thứ tự dòng bằng row position** — nên tập eligible phải lưu là `.npy` chỉ chứa index, không phải một bản copy của dữ liệu.
+
+**Reusable in:** Mọi cache catalog cần đọc theo lựa chọn (sample, filter, backtest theo tập field); và mọi bảng lớn cần tra cứu ngẫu nhiên mà không muốn nạp hết vào RAM.
+
+**Sentiment:** 8 — reviewer sẽ hỏi "vì sao không parquet"; câu trả lời là parquet cần `pyarrow` (dependency mới) và không cho lazy row-block trong khi npz có sẵn trong numpy.
+
+## 2026-10-22T08:53:00Z | code-technique | score: 7
+
+**Where:** `Functions/cache.py` — `save_cache`, `ScopeCache.eligible`; `main.py` — vòng lặp `FIELD_TYPES`
+
+**Pattern:** Một archive per (scope, field type), với tập eligible là **member bên trong** archive chứ không phải file `.npy` rời
+
+**Why:** Layout cũ (`1 npz` + `3 npy` rời) có 2 vấn đề: (1) người đọc phải biết quy ước ghép file nào với file nào, và phải chịu 4 file cho 3 khái niệm; (2) file `.npy` rời không mang metadata scope/type nên không tự mô tả được. Layout mới: `{scope_key}_{type.lower()}.npz` chứa snapshot **chưa lọc** của type đó + member `eligible` (row position) + `meta` có `field_type` và `catalog_frame_id` (hash chung của toàn catalog → biết 3 archive cùng snapshot).
+
+Lỗi logic phải tránh: layout cũ cache `fields` **đã** lọc `coverage`/`dateCoverage` rồi mới tính `eligible_idx` → tập eligible trùng toàn bộ. Layout mới cache snapshot chưa lọc, suy ra eligible local → đúng nguyên tắc "cache raw, lọc local".
+
+**Bài học (generalise):** khi một file cache phục vụ nhiều "view" (type, split, filter), để các view nằm **trong** file chính dưới dạng member thay vì là file rời — file chính tự mô tả đầy đủ, và không có "orphan index" khi copy/move cache. Đồng thời: điều kiện lọc phải được áp dụng **đúng một lần**, và cache phải chứa trạng thái *trước* lọc nếu ta muốn đổi ngưỡng lọc mà không tải lại.
+
+**Reusable in:** Mọi cache cần tách nhiều "view" từ một tải về; mọi pipeline có bước lọc tham số hoá (`MIN_COVERAGE`) — ngưỡng lọc phải nằm ngoài cache để đổi được mà không tải lại.
+
+**Sentiment:** 7 — reviewer sẽ hỏi "tại sao eligible nằm trong npz chứ không phải file riêng"; câu trả lời là khả năng tái lậc (self-describing cache) và tránh lỗi lọc hai lần.
+
+## 2026-10-22T09:22:00Z | code-technique | score: 7
+
+**Where:** `Functions/cache.py` — `cached_scope`, `ScopeCache.eligible_positions`; `main.py` — `fetch_scope` / `main`
+
+**Pattern:** Cache-hit theo *folder scope* (all-or-nothing), và suy ra view từ raw snapshot thay vì lưu sẵn view
+
+**Why:** Folder scope là ranh giới tự nhiên của một lần tải: nếu `cache/{region}_{delay}_{universe}/` tồn tại với đủ 3 file type thì snapshot đã được pin, không cần login và tải lại 41 MB (đo: 22.7 s → 9.0 s). Điều kiện **all-or-nothing** là bắt buộc: scope chỉ có 2/3 file thì phải tải lại toàn bộ, vì nếu chấp nhận partial thì sẽ trộn catalog mới với catalog cũ trong cùng một "scope" — đúng loại bug im lặng.
+
+Bước thứ hai là bỏ member `eligible` khỏi archive: `eligible_positions(min_coverage)` tính lại từ cột raw `coverage`/`dateCoverage` đã lưu. Lý do: `eligible` lưu sẵn là **giá trị đóng băng tại thời điểm save** — đổi `MIN_COVERAGE` thì phải tải lại catalog, tức là ngưỡng lọc biến thành tham số "đòi tải lại". Với raw snapshot, ngưỡng là tham số sống. Chi phí: đọc 2 cột float64 × N dòng thay vì đọc 1 member int64 — vô hại (vài chục ms).
+
+**Bài học (generalise):** khi cache phục vụ nhiều view, cache **dữ liệu gốc + hàm suy ra view**, không cache từng view. Và ranh giới "cache hit" phải là đơn vị nguyên tử: nếu một scope gồm nhiều file thì cache hit = đủ bộ file, không phải "file này tồn tại".
+
+**Reusable in:** Mọi cache nhiều file theo scope; mọi pipeline có bước lọc tham số hoá sau bước tải.
+
+**Sentiment:** 7 — "all-or-nothing" là điều kiện dễ bỏ sót (partial cache trông vẫn chạy được và cho ra kết quả sai).
+
+## 2026-10-22T09:20:00Z | code-technique | score: 6
+
+**Where:** `config/scopes.yaml`
+
+**Pattern:** Ghi scope space của API dưới dạng cây region → delay → universe, kèm block `counts`, thay vì list phẳng
+
+**Why:** `OPTIONS /simulations` **lồng** delay và universe dưới region, nên phép toán "region × delay × universe" (12 × 2 × 21) cho ra 504 tổ hợp — trong đó chỉ **44** là hợp lệ. Ghi list phẳng 504 dòng sẽ khẳng định những scope không tồn tại, và đó là loại bug im lặng đã ghi nhận ở sweep (scope sai trả HTTP 200 với 0 record). Cây giữ đúng quan hệ API và cho phép đếm lại 44 bằng `sum(n_scopes)`.
+
+**Bài học (generalise):** khi snapshot một API có cấu trúc phân cấp, **giữ nguyên cấu trúc** trong file config. Dạng phẳng làm mất đúng thông tin quan trọng nhất (tổ hợp nào hợp lệ) và thay bằng một con số lớn hơn trông có vẻ "đầy đủ" nhưng sai.
+
+**Reusable in:** Mọi config sinh từ API có nested choices; mọi tài liệu tham chiếu scope.
+
+**Sentiment:** 6 — nguyên tắc rõ ràng nhưng file hiện chưa được code nào đọc nên chưa có tác dụng chống bug.
+
+## 2026-10-22T09:27:00Z | code-technique | score: 7
+
+**Where:** `config/scopes.yaml` (bản enumerate)
+
+**Pattern:** Enumerate tập hợp hợp lệ thành list phẳng, thay vì giữ cấu trúc lồng của API
+
+**Why:** Entry trước (09:20) khuyên "giữ nguyên cấu trúc API" — **sai trong trường hợp này**, và đây là correction. Lồng của API là artefact của settings widget, không phải ràng buộc: tập universe của một region không đổi theo delay (verify cả 11 region). Nên cây vừa phức tạp hơn, vừa không thuận tiện cho lấy mẫu. List phẳng 41 dict `{region, delay, universe}` làm mọi draw hợp lệ *by construction* → một lần `random.choice` là xong, không cần bước lọc/validate sau draw.
+
+**Bài học (generalise):** "giữ nguyên cấu trúc nguồn" chỉ đúng khi cấu trúc mang **ý nghĩa**. Trước khi flatten, phải kiểm tra tính chất độc lập bằng dữ liệu thật chứ không suy ra từ vài ví dụ — ở đây mối quan hệ "universe ⊥ delay | region" là điều kiện để flatten mà không mất scope nào. Và cấu trúc phải phục vụ **cách sử dụng dự kiến**, không phục vụ hình dạng của API.
+
+**Reusable in:** Mọi config sinh từ API nested; mọi bảng tra cứu mà mục đích là lấy mẫu.
+
+**Sentiment:** 7 — sửa lại một khuyến nghị trước đó bằng bằng chứng đo trên live API, và làm file dùng được ngay cho mục đích đã nêu.

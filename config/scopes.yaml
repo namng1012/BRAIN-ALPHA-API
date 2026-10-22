@@ -1,0 +1,175 @@
+# Valid simulation scopes of the WorldQuant BRAIN API.
+#
+# Source: OPTIONS /simulations -> actions.POST.settings.children
+# Fetched: 2026-10-22T09:14:00Z
+#
+# `instrumentType` is a platform constant ("EQUITY"), so the scope space is
+# spanned by region / delay / universe only.
+#
+# This file is an ENUMERATION of every scope the platform accepts: 41 entries,
+# one per legal (region, delay, universe) triple. Sampling a scope is therefore
+# a single draw from `scopes` — every entry is legal by construction, so no
+# post-draw validation is needed.
+#
+# The API publishes its settings as a nested tree (universe under region under
+# delay), but the nesting is an artefact of the settings widget, not a
+# dependency: the universe set of a region is identical for every delay that
+# region supports (verified for all 11 regions). Flattening to the cross
+# product therefore loses nothing.
+#
+# `ALL` region is excluded: it is not an equity market region but a size
+# partition of the whole platform, and its universes (LARGE / MEDIUM / SMALL)
+# are not usable universe names for any other region.
+#
+# A universe name is NOT globally unique (e.g. TOP3000 exists for both USA and
+# GLB), so a scope must always be carried as the full triple.
+#
+# NOTE: this is a snapshot of a moving catalog. The platform may add scopes
+# later; re-check the API before relying on the count.
+
+counts:
+  regions: 11
+  delays: 2
+  universes: 18
+  valid_scope_combinations: 41
+
+# Every legal scope. Keys are uniform so a draw is a dict lookup.
+scopes:
+  - region: ASI
+    delay: 1
+    universe: MINVOL10M
+  - region: ASI
+    delay: 1
+    universe: MINVOL1M
+  - region: ASI
+    delay: 1
+    universe: TOP500
+  - region: CHN
+    delay: 0
+    universe: TOP2000U
+  - region: CHN
+    delay: 1
+    universe: TOP2000U
+  - region: DEU
+    delay: 0
+    universe: TOP500
+  - region: DEU
+    delay: 1
+    universe: TOP500
+  - region: EUR
+    delay: 0
+    universe: TOP1200
+  - region: EUR
+    delay: 0
+    universe: TOP2500
+  - region: EUR
+    delay: 0
+    universe: TOP400
+  - region: EUR
+    delay: 0
+    universe: TOP800
+  - region: EUR
+    delay: 0
+    universe: TOPCS1600
+  - region: EUR
+    delay: 1
+    universe: TOP1200
+  - region: EUR
+    delay: 1
+    universe: TOP2500
+  - region: EUR
+    delay: 1
+    universe: TOP400
+  - region: EUR
+    delay: 1
+    universe: TOP800
+  - region: EUR
+    delay: 1
+    universe: TOPCS1600
+  - region: GBR
+    delay: 0
+    universe: TOP700
+  - region: GBR
+    delay: 1
+    universe: TOP700
+  - region: GLB
+    delay: 1
+    universe: MINVOL10M
+  - region: GLB
+    delay: 1
+    universe: MINVOL1M
+  - region: GLB
+    delay: 1
+    universe: TOP3000
+  - region: GLB
+    delay: 1
+    universe: TOPDIV3000
+  - region: HKG
+    delay: 1
+    universe: TOP500
+  - region: HKG
+    delay: 1
+    universe: TOP800
+  - region: IND
+    delay: 1
+    universe: TOP500
+  - region: KOR
+    delay: 1
+    universe: TOP600
+  - region: TWN
+    delay: 1
+    universe: TOP100
+  - region: TWN
+    delay: 1
+    universe: TOP500
+  - region: USA
+    delay: 0
+    universe: TOP1000
+  - region: USA
+    delay: 0
+    universe: TOP200
+  - region: USA
+    delay: 0
+    universe: TOP2000
+  - region: USA
+    delay: 0
+    universe: TOP3000
+  - region: USA
+    delay: 0
+    universe: TOP500
+  - region: USA
+    delay: 0
+    universe: TOPSP500
+  - region: USA
+    delay: 1
+    universe: TOP1000
+  - region: USA
+    delay: 1
+    universe: TOP200
+  - region: USA
+    delay: 1
+    universe: TOP2000
+  - region: USA
+    delay: 1
+    universe: TOP3000
+  - region: USA
+    delay: 1
+    universe: TOP500
+  - region: USA
+    delay: 1
+    universe: TOPSP500
+
+# How many of the 41 scopes each region contributes. Useful for reporting the
+# sampling distribution, and for spotting a region the platform has retired.
+scopes_by_region:
+  ASI: 3
+  CHN: 2
+  DEU: 2
+  EUR: 10
+  GBR: 2
+  GLB: 4
+  HKG: 2
+  IND: 1
+  KOR: 1
+  TWN: 2
+  USA: 12

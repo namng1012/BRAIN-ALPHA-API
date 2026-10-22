@@ -115,3 +115,36 @@ Tổng `alphaCount` toàn scope: vs=1 → 5 609 938; vs=7 → 6. `pyramidMultipl
 **Impact on reported results:** None. Tác động duy nhất là số lần persona flow được kích hoạt. Với ngưỡng 1000 s, một run bắt đầu cách lần login gần nhất hơn ~17 phút sẽ login lại (trước đây là ~33 phút).
 
 **Sentiment:** 7 — thay đổi nhỏ nhưng cần được nêu trong paper vì nó quyết định số lần chạy có thể thực hiện trong một ngày mà không bị khóa account.
+
+## 2026-10-22T08:27:00Z | methodology | score: 7
+
+**Decision:** Cache catalog trên **đĩa vật lý** dạng `.npz` columnar theo lưới (cột × block 8192 dòng), kèm `frame_id = sha256(sorted(field_ids))[:8]` trong metadata; tập eligible lưu **riêng** dưới dạng `.npy` chỉ chứa row position.
+
+**Alternatives considered:**
+- Giữ CSV — rejected: đọc 3 dòng cũng phải parse cả file; CSV không giữ được thứ tự dòng như một khái niệm, nên "lấy vài dòng" không có nghĩa.
+- Parquet + `pyarrow` — rejected: cần dependency mới, và parquet cho lazy *row group* nhưng không cho tổ hợp "block × cột" tự do như npz; đổi dependency để lấy lợi ích nhỏ hơn giá trị.
+- 1 file npz per (cột, block) — rejected: 47 706 × 19 dòng → hàng trăm file, quản lý file nặng hơn lợi ích.
+- Lưu eligible dưới dạng CSV riêng — rejected: nhân bản dữ liệu, và phải parse lại đúng cái ta muốn bỏ.
+- Nén toàn bộ 1 array lớn — rejected: một member = một lần giải nén toàn bộ, mất đúng lợi ích lazy.
+
+**Rationale:** Yêu cầu là "chỉ load các idx cần thiết". Điều đó đòi hỏi hai điều kiện: (i) một tập chỉ số dòng tồn tại được ngoài bảng dữ liệu (→ `.npy` row position), và (ii) địa chỉ hóa giữa chỉ số dòng và byte trên đĩa mà không phải parse (→ lưu theo block, block = member). `frame_id` ghi vào metadata để một run sau có thể xác nhận nó đang chạy trên đúng snapshot catalog, không chỉ "đúng seed".
+
+**Impact on reported results:** Không đổi bất kỳ con số nào. Nhưng nó làm *có thể* chốt `frame_id` cho mọi lần lấy mẫu — một điều kiện tiên quyết đã nêu ở `Docs/random-field-pipeline-proposal.md` §7 và chưa có cơ chế thực thi. Lưu ý: cache là snapshot của thời điểm tải; catalog có dòng chảy mạnh (4 042 field mới trong 2026-04) nên `frame_id` phải được báo cáo cùng mọi kết quả.
+
+**Sentiment:** 7 — là quyết định hạ tầng quyết định khả năng tái lập, không đổi kết quả; cần nêu rõ trong paper rằng frame được đóng băng bằng content-hash.
+
+## 2026-10-22T09:27:00Z | methodology | score: 7
+
+**Decision:** Loại region `ALL` khỏi scope space, và **enumerate** toàn bộ 41 scope hợp lệ thay vì mô tả cấu trúc lồng của API.
+
+**Alternatives considered:**
+- Giữ `ALL` — rejected: `ALL` không phải một equity market region mà là phân tách theo size của toàn platform; universe của nó (LARGE / MEDIUM / SMALL) không dùng được cho region nào khác. Nếu để vào, sampling sẽ sinh scope có ý nghĩa khác hẳn (cross-section toàn bộ platform thay vì một thị trường).
+- Giữ cây `region → delay → universe` như API — rejected: không phục vụ mục tiêu lấy mẫu. Yêu cầu thực tế là "random một scope hợp lệ", mà cây bắt buộc phải biết region trước mới biết delay hợp lệ → 3 bước lồng nhau, mỗi bước là một phép lọc có thể rỗng.
+- Liệt kê 462 tổ hợp phẳng (11 × 2 × 21) rồi lọc — rejected: 421 scope không tồn tại; nếu lọc sai thì im lặng sinh ra scope giả.
+- Suy ra tập universe chung cho mọi region — rejected: universe phụ thuộc region (TOP3000 có ở USA và GLB nhưng không có ở EUR).
+
+**Rationale:** Kiểm chứng trên live API: tập universe của một region **giống hệt nhau ở mọi delay** mà region đó hỗ trợ (cả 11 region, không ngoại lệ). Nghĩa là lồng của API chỉ là artefact của settings widget chứ không phải ràng buộc dữ liệu → phép cross product `{region} × {delays(region)} × {universes(region)}` **không mất scope nào**. Enumerate kết quả đó thành 41 dòng phẳng: mỗi dòng hợp lệ *by construction*, nên lấy mẫu là một draw duy nhất và không cần bước kiểm tra sau draw.
+
+**Impact on reported results:** Không có con số nào đổi — đây là định nghĩa tập scope, không phải phép đo. Điều cần nêu khi báo cáo: draw đều trên 41 scope là **uniform trên scope**, không uniform trên region (USA 12/41 ≈ 29 %, KOR và IND mỗi region 1/41 ≈ 2.4 %). Nếu mục tiêu là phủ đều các thị trường thì phải draw 2 tầng, và đó là quyết định sampling chưa chốt. `ALL` bị loại là một quyết định định nghĩa tập, cần được nêu rõ vì nó thu hẹp scope space từ 44 xuống 41.
+
+**Sentiment:** 7 — flatten được là có điều kiện (verify trên toàn bộ region, không phải suy ra từ vài ví dụ), và loại `ALL` là quyết định định nghĩa tập mà reviewer sẽ hỏi.

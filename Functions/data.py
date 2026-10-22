@@ -6,6 +6,12 @@ import requests
 
 BRAIN_API_URL = "https://api.worldquantbrain.com"
 
+# The BRAIN catalog and simulation endpoints are scoped by
+# (instrumentType, region, delay, universe), but `OPTIONS /simulations` publishes
+# exactly one instrumentType ("EQUITY"), so it is a platform constant rather
+# than a free parameter of the experiment.
+INSTRUMENT_TYPE = "EQUITY"
+
 # The per-second rate limit is shared across the whole session, so a catalog GET
 # can return an HTML error body instead of JSON. Retry a non-JSON body a few
 # times before giving up.
@@ -37,8 +43,10 @@ def _to_frame(records: list[dict]) -> pd.DataFrame:
 class BrainData:
     """Read-only access to the BRAIN catalog: datasets, data fields, settings.
 
-    Every catalog endpoint is scoped by (instrumentType, region, delay, universe),
-    so "how much data exists" is only meaningful per scope.
+    Every catalog endpoint is scoped by (instrumentType, region, delay, universe).
+    `instrumentType` is a platform constant (INSTRUMENT_TYPE), so a scope only
+    varies in region / delay / universe — and "how much data exists" is only
+    meaningful per scope.
     """
 
     def __init__(self, session: requests.Session, base_url: str = BRAIN_API_URL):
@@ -81,22 +89,20 @@ class BrainData:
         }
 
     def combinations(self) -> Iterator[dict]:
-        """Yield every valid (instrumentType, region, delay, universe) scope."""
+        """Yield every valid (region, delay, universe) scope."""
         s = self.settings()
-        for inst in s["instrumentType"]:
-            for region in s["region"][inst["value"]]:
-                for delay in s["delay"][inst["value"]]["region"][region["value"]]:
-                    for universe in s["universe"][inst["value"]]["region"][region["value"]]:
-                        yield {
-                            "instrumentType": inst["value"],
-                            "region": region["value"],
-                            "delay": delay["value"],
-                            "universe": universe["value"],
-                        }
+        for region in s["region"][INSTRUMENT_TYPE]:
+            for delay in s["delay"][INSTRUMENT_TYPE]["region"][region["value"]]:
+                for universe in s["universe"][INSTRUMENT_TYPE]["region"][region["value"]]:
+                    yield {
+                        "region": region["value"],
+                        "delay": delay["value"],
+                        "universe": universe["value"],
+                    }
 
     def _scope_query(self, scope: dict) -> str:
         return (
-            f"instrumentType={scope['instrumentType']}&region={scope['region']}"
+            f"instrumentType={INSTRUMENT_TYPE}&region={scope['region']}"
             f"&delay={scope['delay']}&universe={scope['universe']}"
         )
 
@@ -123,7 +129,6 @@ class BrainData:
             by_type = fs["type"].value_counts().to_dict() if "type" in fs else {}
             rows.append(
                 {
-                    "instrumentType": scope["instrumentType"],
                     "region": scope["region"],
                     "delay": scope["delay"],
                     "universe": scope["universe"],
