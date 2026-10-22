@@ -260,3 +260,17 @@ Bước thứ hai là bỏ member `eligible` khỏi archive: `eligible_positions
 **Reusable in:** Mọi config sinh từ API nested; mọi bảng tra cứu mà mục đích là lấy mẫu.
 
 **Sentiment:** 7 — sửa lại một khuyến nghị trước đó bằng bằng chứng đo trên live API, và làm file dùng được ngay cho mục đích đã nêu.
+
+## 2026-10-22T09:36:00Z | code-technique | score: 7
+
+**Where:** `main.py` — `load_scopes`, `fetch_scope(data, scope)`, `main`
+
+**Pattern:** Tách session khỏi hàm tải scope, để **một** session phục vụ toàn bộ vòng lặp scope
+
+**Why:** `fetch_scope` trước đây tự gọi `BrainLogin().get_session()` — chạy lặp 41 scope sẽ tốn **41 lần login**, vượt giới hạn nền tảng (5 lần/phút, 25 lần/ngày). Tách `BrainData` ra tham số và đăng nhập một lần ở `main()` giữ toàn bộ vòng lặp trong **1 session**. Điều kiện: chỉ login khi thật sự còn scope thiếu cache — nếu đã cache đủ thì cả run không cần auth, và phần "Login successful. JWT" không lộ token ra log.
+
+**Bài học (generalise):** khi lặp trên một tài nguyên bị **giới hạn tần suất theo chính sách** (login, quota API), đơn vị tài nguyên phải được nâng lên một tầng — tách thứ bị giới hạn (auth) ra khỏi thứ bị lặp (tải scope), và chỉ xin nó khi thật sự cần. Ngược lại thì một vòng lặp hợp lệ vẫn chết vì hết quota.
+
+**Reusable in:** Mọi batch job gọi API có auth rate-limit; mọi vòng lặp trên phạm vi lớn hơn số lần auth cho phép.
+
+**Sentiment:** 7 — lỗi này chỉ lộ ra khi quy mô lặp vượt ngưỡng (41 > 25), nên dễ bị bỏ sót trong review.

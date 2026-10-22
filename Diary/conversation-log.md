@@ -436,3 +436,20 @@
 **Open questions:** Sampling đều trên 41 scope là **uniform trên scope**, không phải uniform trên region → USA chiếm 12/41 ≈ 29 % mẫu, KOR/IND mỗi region 1/41 ≈ 2.4 %. Nếu muốn uniform theo region thì cần draw 2 tầng, phải quyết định khi viết code. Chưa có code đọc file (user yêu cầu không tạo script).
 
 **Sentiment:** 7 — chuyển từ "mô tả cấu trúc API" sang "enum hợp lệ dùng được ngay", đúng thứ user cần; và phát hiện universe-set độc lập với delay là điều kiện để flatten mà không mất thông tin.
+
+## 2026-10-22T09:36:00Z | chat-summary | score: 7
+
+**Request:** "@main.py (114-116) cho tôi 1 vòng lặp for load các scope từ yaml vào đây để cache toàn bộ dữ liệu" — thay scope cứng `USA/0/TOP3000` bằng vòng lặp duyệt toàn bộ scope đọc từ YAML và cache tất cả.
+
+**Outcome:** `main.py` chuyển sang duyệt 41 scope trong `config/scopes.yaml`. Thêm `SCOPES_PATH` + `load_scopes()` đọc key `scopes` của YAML. `fetch_scope(data, scope)` nay nhận `BrainData` dùng chung thay vì tự login (login chuyển ra `main()`, **một** session cho toàn bộ 41 scope). Vòng lặp: `cached_scope()` → hit thì dùng cache, miss thì `fetch_scope`; sau đó in per-field-type stats + 5 field mẫu cho từng scope, và tổng kết cuối. `catalog_total` lấy từ `cache.catalog_total` như cũ.
+
+**Files touched:**
+- `main.py` (vòng lặp 41 scope, `load_scopes`, tách login)
+- `Diary/conversation-log.md` (entry này)
+- `Diary/code-technique.md` (entry về login budget)
+
+**Verify:** `ast.parse` OK; `load_scopes()` trả 41 scope, phần tử đầu `ASI/1/MINVOL10M`, cuối `USA/1/TOPSP500`. Chạy thử với 2 scope (1 đã cache `USA_0_TOP3000` + 1 live `ASI_1_MINVOL10M`) để chạm cả hai nhánh: cả hai đều ra đúng số liệu, cache mới ghi vào `cache/ASI_1_MINVOL10M/` (MATRIX 15 755 / VECTOR 5 837 / GROUP 1 900). Không chạy full 41 scope (nhiều request live) — cần user quyết định.
+
+**Open questions:** Chưa chạy full 41 scope. Ước tính 82 request (2/scope: `/data-sets` + `/data-fields`) → tối thiểu ~82 s theo rate limit 1 req/s, và dung lượng ~1-7 MB/scope (~50-150 MB tổng). `ALL` không có trong YAML nên 41 scope, không phải 44.
+
+**Sentiment:** 7 — vòng lặp chạy đúng trên cả nhánh hit và miss, và việc gộp 1 session cho 41 scope là điều kiện để chạy nổi (login bị giới hạn 25 lần/ngày).

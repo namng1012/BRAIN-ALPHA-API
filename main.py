@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 from Functions.cache import (
     FIELD_TYPES,
@@ -14,21 +15,22 @@ from Functions.cache import (
 from Functions.data import BrainData
 from Functions.login import BrainLogin
 
+# Every valid scope tuple, as enumerated in config/scopes.yaml. The list is a
+# snapshot of OPTIONS /simulations, so a scope the platform has since dropped
+# would fail the catalog request instead of being silently skipped.
+SCOPES_PATH = Path(__file__).parent / "config" / "scopes.yaml"
 
-def fetch_scope(scope: dict) -> dict[str, Path] | None:
-    """Log in, download the whole catalog of one scope, and cache it per field type.
 
-    Returns the cached archive path of every field type, or None if the login
-    did not produce a session.
+def load_scopes(path: Path = SCOPES_PATH) -> list[dict]:
+    """Read the enumerated scope tuples from the YAML config."""
+    return yaml.safe_load(path.read_text(encoding="utf-8"))["scopes"]
+
+
+def fetch_scope(data: BrainData, scope: dict) -> dict[str, Path]:
+    """Download the whole catalog of one scope and cache it per field type.
+
+    Returns the cached archive path of every field type.
     """
-    login = BrainLogin()
-    s = login.get_session()
-    if s is None:
-        return None
-    print("Login successful. JWT:")
-    print(login.get_token(s))
-
-    data = BrainData(s, login.base_url)
     datasets = data.datasets(scope)
     datafields = data.datafields(scope)
 
@@ -111,10 +113,6 @@ def main():
     # encoding.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    # Only region / delay / universe vary: instrumentType is a platform constant
-    # (see Functions/data.py INSTRUMENT_TYPE).
-    scope = {"region": "USA", "delay": 0, "universe": "TOP3000"}
-
     # Keep only fields that are populated enough to backtest on: the field's own
     # coverage (fraction of the universe the field is defined for) and its
     # dateCoverage (fraction of the history the field spans) must both clear
@@ -122,47 +120,78 @@ def main():
     # fail the comparison.
     MIN_COVERAGE = 0.7
 
+    # Every valid scope tuple, enumerated in config/scopes.yaml. Only region /
+    # delay / universe vary: instrumentType is a platform constant (see
+    # Functions/data.py INSTRUMENT_TYPE).
+    scopes = load_scopes()
+
     # The catalog is a moving target, so a scope is downloaded once and reused
     # from disk afterwards: an existing cache folder means the snapshot is
     # already pinned, and re-downloading it would only replace a reproducible
     # snapshot with a different one.
-    paths = cached_scope(scope)
-    if paths is None:
-        paths = fetch_scope(scope)
-        if paths is None:
+    paths_by_scope = {scope_key(scope): cached_scope(scope) for scope in scopes}
+
+    # One session serves every scope: logging in per scope would burn the
+    # platform's login budget (5 per minute, 25 per day) for no reason.
+    data = None
+    if any(paths is None for paths in paths_by_scope.values()):
+        login = BrainLogin()
+        s = login.get_session()
+        if s is None:
             return
-    else:
-        print(f"Cache hit for scope {scope_key(scope)}: reusing the cached catalog.")
+        print("Login successful. JWT:")
+        print(login.get_token(s))
+        data = BrainData(s, login.base_url)
 
     display_cols = ["fieldid", "datasetid", "coverage", "dateCoverage"]
-    n_eligible = 0
-    catalog_total = 0
     rng = np.random.default_rng()
+    totals = []
 
-    for field_type in FIELD_TYPES:
-        path = paths[field_type]
-        cache = ScopeCache(path)
-        eligible = cache.eligible_positions(MIN_COVERAGE)
-        n_eligible += eligible.size
-        catalog_total = cache.catalog_total
+    for scope in scopes:
+        paths = paths_by_scope[scope_key(scope)]
+        if paths is None:
+            paths = fetch_scope(data, scope)
+        else:
+            print(f"Cache hit for scope {scope_key(scope)}: reusing the cached catalog.")
+
+        n_eligible = 0
+        catalog_total = 0
+
+        for field_type in FIELD_TYPES:
+            path = paths[field_type]
+            cache = ScopeCache(path)
+            eligible = cache.eligible_positions(MIN_COVERAGE)
+            n_eligible += eligible.size
+            catalog_total = cache.catalog_total
+            print(
+                f"{scope_key(scope)} {field_type}: {cache.n_rows} rows, "
+                f"{eligible.size} eligible "
+                f"({eligible.size / max(cache.n_rows, 1):.1%}) -> "
+                f"cache/{path.parent.name}/{path.name} "
+                f"({path.stat().st_size / 1e6:.1f} MB, catalog_frame_id={cache.catalog_frame_id})"
+            )
+
+            # Draw five fields at random from the eligible positions, then read back
+            # only those rows and only the columns actually displayed — narrowing the
+            # column set avoids decompressing the other 15.
+            picked = np.sort(rng.choice(eligible, size=min(5, eligible.size), replace=False))
+            sampled = cache.take(picked, columns=display_cols)
+            print(sampled.to_string(index=False))
+            cache.close()
+
         print(
-            f"{field_type}: {cache.n_rows} rows, {eligible.size} eligible "
-            f"({eligible.size / max(cache.n_rows, 1):.1%}) -> "
-            f"cache/{path.parent.name}/{path.name} "
-            f"({path.stat().st_size / 1e6:.1f} MB, catalog_frame_id={cache.catalog_frame_id})"
+            f"{scope_key(scope)}: fields with coverage > {MIN_COVERAGE} and "
+            f"dateCoverage > {MIN_COVERAGE}: {n_eligible} / {catalog_total} "
+            f"({n_eligible / catalog_total:.1%})\n"
         )
+        totals.append((scope_key(scope), n_eligible, catalog_total))
 
-        # Draw five fields at random from the eligible positions, then read back
-        # only those rows and only the columns actually displayed — narrowing the
-        # column set avoids decompressing the other 15.
-        picked = np.sort(rng.choice(eligible, size=min(5, eligible.size), replace=False))
-        sampled = cache.take(picked, columns=display_cols)
-        print(sampled.to_string(index=False))
-        cache.close()
-
+    grand_eligible = sum(n for _, n, _ in totals)
+    grand_total = sum(t for _, _, t in totals)
     print(
-        f"\nFields with coverage > {MIN_COVERAGE} and dateCoverage > {MIN_COVERAGE}: "
-        f"{n_eligible} / {catalog_total} ({n_eligible / catalog_total:.1%})"
+        f"Scopes cached: {len(totals)} / {len(scopes)}; "
+        f"eligible fields across scopes: {grand_eligible} / {grand_total} "
+        f"({grand_eligible / grand_total:.1%})"
     )
 
 
