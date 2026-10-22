@@ -274,3 +274,67 @@ Bước thứ hai là bỏ member `eligible` khỏi archive: `eligible_positions
 **Reusable in:** Mọi batch job gọi API có auth rate-limit; mọi vòng lặp trên phạm vi lớn hơn số lần auth cho phép.
 
 **Sentiment:** 7 — lỗi này chỉ lộ ra khi quy mô lặp vượt ngưỡng (41 > 25), nên dễ bị bỏ sót trong review.
+
+## 2026-10-22T15:46:39Z | code-technique | score: 8
+
+**Where:** `main.py` — `main()` (vòng lặp scope), `totals` / `grand_eligible` / `grand_total`
+
+**Pattern:** Duyệt N scope dùng chung **một** biến tổng `catalog_total` gán đè trong vòng lặp, rồi cộng dồn — tạo ra con số scope-field bị đếm trùng mà vẫn trông như catalog size
+
+**Why:** `catalog_total` được khởi tạo `0` **bên trong** mỗi scope, rồi `catalog_total = cache.catalog_total` gán đè 3 lần (MATRIX → VECTOR → GROUP), sau đó `totals.append((scope_key, n_eligible, catalog_total))`. Vì cả 3 archive của một scope cùng mang `catalog_total` nên bản thân vòng trong đúng; nhưng khi `grand_total = sum(t for _, _, t in totals)` cộng trên 41 scope thì **cùng một field được đếm 5–6 lần** (`EUR/1` có 5 universe cùng catalog). Đo trên cache hiện tại: 16 scope đã tải mới dùng **7** `catalog_frame_id` distinct → `grand_total` lớn hơn tổng field thật khoảng 2–3×, và `grand_eligible / grand_total` là **tỷ lệ theo scope-field**, không phải tỷ lệ field dùng được.
+
+Cách phát hiện lỗi loại này không cần sửa code: đếm `catalog_frame_id` distinct trong cache và so với số folder. Không khớp ⇒ đang cộng dồn scope, chưa cộng dồn catalog.
+
+**Bài học (generalise):** khi một pipeline duyệt nhiều "phiên bản" của cùng một dữ liệu và in tổng cuối, phải hỏi **"tổng này đếm cái gì, theo đơn vị nào?"**. Nếu 2 scope có cùng `content_hash`, chúng là cùng một đối tượng và mọi phép cộng phải deduplicate trước. Đây là biến thể của lỗi đã ghi ở `Docs/data-description.md` §4.
+
+**Reusable in:** Mọi chỗ in "tổng X / tổng Y" cuối pipeline; mọi bảng tổng hợp nhiều partition có nội dung trùng nhau.
+
+**Sentiment:** 8 — con số in ra trông hợp lệ và sẽ vào bảng kết quả, nhưng đơn vị đo sai; reviewer chỉ cần hỏi "trong số field này có bao nhiêu field thật" là lộ.
+
+## 2026-10-22T15:46:39Z | code-technique | score: 7
+
+**Where:** `main.py:147` — `rng = np.random.default_rng()`; `Functions/cache.py` — `save_cache` (khối `meta`)
+
+**Pattern:** RNG không seed, còn snapshot thì đã được pin bằng content-hash — độ lặp được chỉ đúng một nửa
+
+**Why:** `main.py` dùng `np.random.default_rng()` **không truyền seed** → mỗi lần chạy ra bộ 5 field khác nhau, không tái lập được. Nhưng phần "có thể tái lập" thì đã làm rất chặt: `save_cache` ghi `meta` chứa `fetched_at`, `frame_id`, `catalog_frame_id`, `scope`, `field_type`. Thiếu duy nhất là `seed` của RNG (và index draw) trong `meta` hoặc output. Vấn đề phụ: 41 scope có 16 catalog khác nhau nhưng `catalog_frame_id` trùng nhau, nên `meta` **không phân biệt được scope nào sinh ra draw** nếu ta chỉ nhìn `frame_id`.
+
+**Bài học (generalise):** "có seed" và "có seed + fingerprint của dữ liệu mà seed áp dụng lên" là hai mức tái lập khác nhau. `default_rng()` không seed = mức 0; `default_rng(42)` = mức 1, vẫn hỏng nếu cache đổi; `frame_id + seed + scope` = mức 2. Repo đã ở mức 2 cho phần dữ liệu nhưng mức 0 cho phần draw.
+
+**Reusable in:** Mọi `rng` dùng để lấy mẫu trong pipeline nghiên cứu; và mọi output cần tái lập.
+
+**Sentiment:** 7 — fix một dòng, nhưng thiếu nó thì toàn bộ công sức pin snapshot (`frame_id`, cache all-or-nothing) trở nên vô nghĩa vì không biết draw đó là từ đâu.
+
+## 2026-10-22T18:31:01Z | code-technique | score: 7
+
+**Where:** `main.py` — nhánh `else` của `if builder.needs_auth():`
+
+**Pattern:** Báo cáo trạng thái hết hạn của một tài nguyên bằng cách gọi hàm kiểm tra **ở nhánh không tiêu thụ tài nguyên đó**, thay vì nhét hàm kiểm tra vào đường dẫn vốn đã tiêu thụ nó
+
+**Why:** Cơ chế đếm ngược session **đã có sẵn** — `login.check_login()` trả về số giây còn lại qua `GET /authentication`. Nhưng nó nằm trong `get_session()`, mà `get_session()` chỉ chạy khi `needs_auth()` là `True`. Khi cache còn tươi thì nhánh login bị bỏ qua hoàn toàn ⇒ không có gì để in ⇒ user hỏi "tôi không thấy còn bao lâu". Đây không phải lỗi cơ chế mà là dòng báo cáo chưa từng được viết ra terminal.
+
+Cách sửa đúng: `else: load_session()` rồi `check_login()`. Nhánh này **vốn đã có session trên đĩa** nên `check_login()` chỉ là 1 `GET` read-only — không tốn login nào, giữ nguyên ngân sách 25 login/ngày. Nếu đặt báo cáo vào `get_session()` thì bắt buộc phải login mới được báo cáo login → tự phá mục đích.
+
+**Bài học (generalise):** khi một API có sẵn hàm "còn bao lâu", đừng gọi nó ở đường dẫn đắt tiền nhất. Tách báo cáo (read-only) khỏi hành động (tiêu thụ tài nguyên) — báo cáo thuộc về nhánh rẻ. Cách phổ biến hơn: `if needs_auth(): spend() else: report()`.
+
+**Reusable in:** Mọi cặp "tiêu thụ / báo cáo" — token, quota, file lock, license seat.
+
+**Sentiment:** 7 — không phải mới, nhưng dễ làm ngược lại: đặt báo cáo vào đường dẫn login vẫn "chạy được" nên trông như đúng cho tới khi người dùng hỏi không thấy gì.
+
+## 2026-10-22T18:31:01Z.1 | code-technique | score: 7
+
+**Where:** `Functions/cache.py` — `CatalogCache.expires_in_seconds()`
+
+**Pattern:** Suy ra countdown từ **chính** hằng số mà quyết định hành vi dùng, thay vì khai một hằng số thứ hai cho mục đích hiển thị
+
+**Why:** `CatalogBuilder.stale_scopes()` quyết định refetch bằng cách so `age_seconds(paths) > CATALOG_MAX_AGE_SECONDS`. Nếu viết `expires_in = MAX_AGE - age` với một hằng số riêng cho báo cáo, số in ra và quyết định của run có thể lệch nhau sau nàa khi ai đó đổi cadence. Viết `return CATALOG_MAX_AGE_SECONDS - self.age_seconds(paths)` buộc hai bên dùng **cùng một nguồn sự thật**, nên báo cáo không bao giờ tương phản với hành vi.
+
+Quy ước dấu: âm = đã hết hạn. Cùng kiểu với `RELOGIN_THRESHOLD_SECONDS` trong `login.py` — deadline đo từ lúc lấy tài nguyên, kiểm tra **trước** khi dùng chứ không phải sau khi hỏng.
+
+Một quyết định khác đáng ghi: chỉ in scope **hết hạn sớm nhất** (`min` theo `expires_in`) thay vì cả 41 scope. Vì `min` chính là cái quyết định run mai có phải login không — in hết sẽ làm nhiễu đúng thông tin cần đọc.
+
+**Bài học (generalise):** mọi biểu hiển thị trạng thái hết hạn nên là hàm của điều kiện quyết định, không phải phép tính độc lập. Nếu đường báo cáo và đường quyết định tách rời, chúng sẽ nói dối nhau.
+
+**Reusable in:** Quota theo tháng, EOL của thư viện, TTL của cache key khác.
+
+**Sentiment:** 7 — reviewer sẽ hỏi "tại sao không hardcode 15 ngày trong chuỗi in?", và câu trả lời (buộc dùng chung hằng số quyết định) là điều đáng giữ.

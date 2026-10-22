@@ -46,7 +46,18 @@
 
 **Decision (đính chính entry trước):** `universe` **không** phải là tham số lọc tập field — nó là tham số chọn *tập instrument* để backtest. Frame hiệu dụng của catalog là **cặp `(region, delay)`**, không phải tuple 4 thành phần.
 
+**Bổ sung (2026-10-22, đo trên cache thật của `main.py`):** nhận định "frame = `(region, delay)`" phải đọc là *"frame = tập **field id**"* — **không** phải "frame = cả nội dung metadata". Đo trên 16 scope đã cache: 16 folder nhưng chỉ **7 `catalog_frame_id` distinct**. `EUR/0/{TOP400,TOP1200,TOP2500,TOP800,TOPCS1600}` có **cùng id và cùng `coverage`/`dateCoverage`** (5 universe → 5 folder, 1 catalog). Nhưng `ASI/1/{TOP500,MINVOL1M,MINVOL10M}` có **cùng id nhưng `coverage` khác ở 1 274 / 15 755 dòng**, và đa số là `TOP500 = 0.0` → `MINVOL1M = 1.0/0.96/0.9` (999 dòng), tập trung ở `pv37` (622), `analyst14` (147), `analyst4` (104). ⇒ `coverage` là **tỉ lệ phủ trên tập instrument của universe đó**, và với `MINVOL1M`/`TOP500` (cùng top ~N theo tiêu chí khác nhau) việc một field không có trong `TOP500` là có thật.
+
 **Alternatives considered:**
+- Bỏ qua, coi mọi scope cùng `(region, delay)` là giống hệt nhau (như entry trước) — rejected, sai ở `ASI/1`: `ASI_1_TOP500` có **7 541** field eligible ở `MIN_COVERAGE=0.7`, `ASI_1_MINVOL1M` có **8 161**; tập eligible lệch **626 vị trí** (`|A−B|=3`, `|B−A|=623`).
+- Xem `coverage` là thuộc tính không đổi của field — rejected, đo trực tiếp trên cache.
+- Gộp 41 scope thành 16 catalog để tiết kiệm tải — deferred, xem entry 2026-10-22T15:46 về weighting.
+
+**Rationale:** `coverage` là tỉ lệ phủ theo universe, nên nó là **thành phần của frame**, không phải metadata cố định. Frame đầy đủ = `(region, delay, universe)` + `catalog_frame_id`, và phải kèm cả fingerprint của tập eligible nếu muốn tái lập *đúng tập field lấy mẫu được*.
+
+**Impact on reported results:** Mọi tỷ lệ "eligible / catalog" phải tính **trong scope đã ghi nhãn**, không được gộp 41 scope rồi chia tổng: `grand_eligible / grand_total` hiện in trong `main.py:193` cộng dồn 41 scope, tức **đếm trùng cùng một field 5–6 lần**. Đây là con số scope-field, không phải catalog size — khác hẳn khi claim "số field dùng được".
+
+**Sentiment:** 8 — sửa một nhận định đã ghi vào `Docs/random-field-pipeline-proposal.md` §2 và vào `Diary/methodology.md`; frame sai thì mọi tỷ lệ eligible sau đó sai.
 - Giữ tuple `(region, delay, universe)` làm đơn vị phân tích (như entry 16:51) — rejected, đo overlap thực tế: `USA/1/TOP3000` và `USA/1/TOP500` trả về **cùng một tập 75 926 id** (Jaccard 1.000). Universe không đổi tập id.
 - Dùng `dataset` (286) làm frame thứ cấp thay vì `field` — deferred, chưa rõ có hợp với mục tiêu "3 field ngẫu nhiên" hay không.
 
@@ -148,3 +159,44 @@ Tổng `alphaCount` toàn scope: vs=1 → 5 609 938; vs=7 → 6. `pyramidMultipl
 **Impact on reported results:** Không có con số nào đổi — đây là định nghĩa tập scope, không phải phép đo. Điều cần nêu khi báo cáo: draw đều trên 41 scope là **uniform trên scope**, không uniform trên region (USA 12/41 ≈ 29 %, KOR và IND mỗi region 1/41 ≈ 2.4 %). Nếu mục tiêu là phủ đều các thị trường thì phải draw 2 tầng, và đó là quyết định sampling chưa chốt. `ALL` bị loại là một quyết định định nghĩa tập, cần được nêu rõ vì nó thu hẹp scope space từ 44 xuống 41.
 
 **Sentiment:** 7 — flatten được là có điều kiện (verify trên toàn bộ region, không phải suy ra từ vài ví dụ), và loại `ALL` là quyết định định nghĩa tập mà reviewer sẽ hỏi.
+
+## 2026-10-22T15:46:39Z | methodology | score: 9
+
+**Decision:** Khi lấy mẫu trên 41 scope, **phải ghi rõ đây là uniform trên scope, không phải uniform trên catalog** — và phải báo cáo cái giá của sự khác biệt đó thay vì coi là vô hại.
+
+**Alternatives considered:**
+- Draw uniform trên 16 catalog (`(region, delay)`) để mỗi field-set được chọn đều nhau — rejected (chưa quyết định, nhưng đây là ứng viên chính): 41 scope phủ **16** catalog khác nhau, nên draw uniform trên scope **tăng trọng số** cho catalog nhiều universe.
+- Draw uniform trên 16 catalog, mỗi catalog lại chọn 1 universe uniform — chưa chốt, xem entry kế.
+- Tuyên bố "uniform trên 41 scope" là đủ trung thực — rejected, con số 53.7 % là đủ để reviewer hỏi ngay.
+
+**Rationale (đo trên `config/scopes.yaml`, 41 scope → 16 catalog):**
+
+| catalog | số universe | tỉ trọng draw uniform trên scope |
+|---|---|---|
+| `USA/0`, `USA/1` | 6 mỗi cái | 14.6 % mỗi cái |
+| `EUR/0`, `EUR/1` | 5 mỗi cái | 12.2 % mỗi cái |
+| `GLB/1` | 4 | 9.8 % |
+| `ASI/1` | 3 | 7.3 % |
+| `HKG/1`, `TWN/1` | 2 mỗi cái | 4.9 % mỗi cái |
+| 8 catalog còn lại (`CHN/0,1`, `DEU/0,1`, `GBR/0,1`, `IND/1`, `KOR/1`) | 1 mỗi cái | 2.4 % mỗi cái |
+
+Nói cách khác: **`EUR` + `USA` chiếm 22/41 = 53.7 % draw nhưng chỉ 4/16 = 25 % catalog**; ngược lại mỗi catalog "lẻ" (`KOR/1`, `IND/1`, `GBR/0`, …) chỉ 2.4 % thay vì 6.25 % (= 1/16) như kỳ vọng của uniform. Và vì `EUR/1` lớn hơn `KOR/1` rất nhiều (35 225 vs ~3 000), draw uniform trên scope **lệch mạnh về catalog lớn**, không chỉ lệch về region.
+
+**Impact on reported results:** Bảng phân phối draw phải cột **`region` + `delay` + `universe` + `catalog_frame_id`**, và phải có một dòng nêu rõ quy ước weighting. Nếu kết luận phụ thuộc vào việc mẫu có phủ đều 16 catalog hay không (ví dụ: claim "kết luận không nhạy với region"), thì draw uniform trên scope **không** đủ để chứng minh claim đó — phải chạy thêm uniform trên catalog rồi so sánh.
+
+**Sentiment:** 9 — ảnh hưởng trực tiếp kết luận nghiên cứu (liệu claim có nhạy với region hay không), và dễ bị reviewer bắt vì 22/41 là con số rất rõ.
+
+## 2026-10-22T18:31:01Z | methodology | score: 8
+
+**Decision:** `check_login()` chỉ là **điểm kiểm tra một lần lúc đầu run**, không phải đếm ngược liên tục giữa các scope.
+
+**Alternatives considered:**
+- Gọi `check_login()` giữa mỗi scope trong `run()` — tốn 41 `GET /authentication`, và chỉ phát hiện hậu quá (token chết ở scope 30 thì 29 scope đã tải xoong rồi mới biết).
+- Đặt deadline cứng (`sleep` tới khi hết hạn rồi login lại) — sai với `RELOGIN_THRESHOLD_SECONDS` vốn cố ý *kiểm tra trước khi dùng* chứ không ngủ chờ.
+- Gọi lại trước mỗi `fetch_scope` — nhiều nhất khi 41 scope đều miss cùng lúc, tức là đúng trường hợp cần nó nhất.
+
+**Rationale:** Số giây còn lại là thời gian token **sống**, đếm từ lúc `check_login()` chạy — không phải deadline của một run dài. Ước tính 41 scope hết hạn cùng lúc ⇒ vài trăm request; nếu mỗi request ~1 s theo rate limit thì vượt 67 min, tức là có thể vượt cả token 72 min. Một số kiểm tra ở đầu không bảo đảm token sống tới cuối.
+
+**Impact on reported results:** Cache hiện tại đủ tươi (41/41, `ASI_1_MINVOL10M` còn 14.93 d) nên run hiện tại **không gọi API nào** ⇒ token không liên quan, con số `4068s` chỉ là thông tin. Nhưng khi 25 scope chưa cache kia hết hạn đồng loạt thì run đầu tiên là lúc con số này có ý nghĩa, và nếu run đó chết giữa chừng thì phải chạy lại từ đầu (không có resume theo scope). Nếu một reviewer hỏi "run dài bao lâu, token có đủ không", câu trả lời hiện tại là **không được đảm bảo** — cần ghi vào limitation, hoặc thêm checkpoint giữa các scope.
+
+**Sentiment:** 8 — không ảnh hưởng số đã báo cáo, nhưng nó là giới hạn của thiết kế auth hiện tại mà reviewer rất dễ hỏi, và đã được nói ra rõ với user thay vì để ngầm.

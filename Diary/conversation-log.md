@@ -453,3 +453,39 @@
 **Open questions:** Chưa chạy full 41 scope. Ước tính 82 request (2/scope: `/data-sets` + `/data-fields`) → tối thiểu ~82 s theo rate limit 1 req/s, và dung lượng ~1-7 MB/scope (~50-150 MB tổng). `ALL` không có trong YAML nên 41 scope, không phải 44.
 
 **Sentiment:** 7 — vòng lặp chạy đúng trên cả nhánh hit và miss, và việc gộp 1 session cho 41 scope là điều kiện để chạy nổi (login bị giới hạn 25 lần/ngày).
+
+## 2026-10-22T15:46:39Z | chat-summary | score: 8
+
+**Request:** "cập nhật lại Diary và các script tôi mới git pull" — sau `git pull`, commit mới nhất là `5e42078 "minor fix"` (16:39 22-10) sửa `main.py` (117 dòng đổi) + `Docs/data-description.md`. Task: đọc code mới và cập nhật Diary cho khớp.
+
+**Outcome:** Đọc toàn bộ code mới (`main.py` 200 dòng, `Functions/cache.py`, `Functions/data.py`, `config/scopes.yaml`, rule 11/16 mới) và đối chiếu cache thật trên đĩa (`cache/` đang có **16/41 scope**, 14 MB). Ghi 4 entry Diary mới (2 code-technique + 2 methodology) và đính chính 1 entry cũ. Phát hiện quan trọng nhất: nhận định "frame = `(region, delay)`" ghi ở entry `17:21:58` là **chưa đủ** — `coverage` là tỉ lệ phủ *theo universe*, nên `ASI_1_TOP500` và `ASI_1_MINVOL1M` có cùng tập id nhưng tập eligible khác nhau (7 541 vs 8 161, lệch 626 vị trí). Ngoài ra phát hiện 2 lỗi trong code mới: `grand_total` cộng dồn 41 scope nên đếm trùng field 5–6×, và `rng` không seed nên draw không tái lập được dù snapshot đã pin rất chặt.
+
+**Files touched:**
+- `Diary/code-technique.md` (+2 entry)
+- `Diary/methodology.md` (+2 entry, đính chính 1 entry cũ)
+
+**Verify:** Đếm `catalog_frame_id` distinct từ `meta` của 16 folder cache = **7** (khớp 16 scope → 16 folder nhưng 7 catalog). So `coverage` giữa các universe cùng `(region, delay)`: `EUR/0` (5 universe) khác 0 dòng, `EUR/1` (4 universe) khác 0 dòng, `ASI/1` khác **1 274 / 15 755 dòng** (999 dòng là `TOP500=0 → MINVOL1M>0`, tập trung `pv37` 622 / `analyst14` 147 / `analyst4` 104). Tỷ trọng draw từ `scopes.yaml`: EUR+USA = 22/41 = 53.7 % trong khi chỉ chiếm 4/16 = 25 % catalog.
+
+**Open questions:** 25 scope chưa cache (giữa `EUR_1_TOP800` và `GBR_0_TOP700` theo thứ tự YAML); `main.py:147` `rng` chưa seed; `grand_total` chưa dedup theo `catalog_frame_id`; `Docs/data-description.md` §5 còn hướng dẫn "sửa biến `scope` trong `main.py`" nhưng `main.py` giờ đã không còn biến đó (đọc từ YAML); `Docs/random-field-pipeline-proposal.md` §2 cần đính chính theo phát hiện mới về `coverage`.
+
+**Sentiment:** 8 — git pull đã biến giả thuyết thành code chạy thật, và kiểm tra cache đã lộ 2 lỗi đo sai + 1 đính chính mà không code thì sẽ bỏ sót.
+
+## 2026-10-22T18:31:01Z | chat-summary | score: 6
+
+**Request:** "xóa các print trong @Functions/data.py", sau đó "tôi không thấy login còn bao nhiêu thời gian để phải login lại ở terminal", sau đó "các cache cũng phải có thời gian đếm ngược out date tôi cũng muốn hiện lên" — ba lượt liên tiếp trên cùng một chủ đề: làm terminal hiện được trạng thái hết hạn.
+
+**Outcome:** Xoá 3 `print` trong `CatalogBuilder.run()`; vì `totals` thành giá trị bị bỏ nên `run()` nay `return totals` và chữ ký đổi `-> list[tuple[str, int, int]]`. Thêm nhánh `else` trong `main.py` báo cáo session qua `check_login()` — chi phí 0 login vì nhánh này vốn đã có session cache. Thêm `CatalogCache.expires_in_seconds()` và in scope hết hạn sớm nhất.
+
+**Files touched:**
+- `Functions/data.py` (bỏ 3 `print`, `run()` trả `totals`)
+- `Functions/cache.py` (`expires_in_seconds`)
+- `main.py` (2 dòng countdown, import `CATALOG_MAX_AGE_SECONDS` + `RELOGIN_THRESHOLD_SECONDS`)
+- `Diary/conversation-log.md` (entry này)
+- `Diary/code-technique.md` (+2 entry)
+- `Diary/methodology.md` (+1 entry)
+
+**Verify:** `grep "print(" Functions/data.py` → none. `uv run python main.py` exit 0, in đủ 2 dòng countdown. Đối chiếu `expires_in_seconds < 0` với `age > CATALOG_MAX_AGE_SECONDS` trên `ASI_1_MINVOL10M`: khớp. Nhánh `expired` chạy đúng với `left = -5000.0`.
+
+**Open questions:** `check_login()` chỉ gọi một lần lúc đầu, không giữ token sống suốt run dài (chi tiết ở `methodology.md`).
+
+**Sentiment:** 6 — chủ yếu là làm terminal dễ đọc, nhưng phát sinh một hệ quả cấu trúc đáng ghi (`run()` thành có giá trị trả về).

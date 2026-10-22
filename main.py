@@ -1,110 +1,8 @@
 import sys
-from pathlib import Path
 
-import numpy as np
-import yaml
-
-from Functions.cache import (
-    FIELD_TYPES,
-    ScopeCache,
-    cached_scope,
-    frame_id,
-    save_cache,
-    scope_key,
-)
-from Functions.data import BrainData
-from Functions.login import BrainLogin
-
-# Every valid scope tuple, as enumerated in config/scopes.yaml. The list is a
-# snapshot of OPTIONS /simulations, so a scope the platform has since dropped
-# would fail the catalog request instead of being silently skipped.
-SCOPES_PATH = Path(__file__).parent / "config" / "scopes.yaml"
-
-
-def load_scopes(path: Path = SCOPES_PATH) -> list[dict]:
-    """Read the enumerated scope tuples from the YAML config."""
-    return yaml.safe_load(path.read_text(encoding="utf-8"))["scopes"]
-
-
-def fetch_scope(data: BrainData, scope: dict) -> dict[str, Path]:
-    """Download the whole catalog of one scope and cache it per field type.
-
-    Returns the cached archive path of every field type.
-    """
-    datasets = data.datasets(scope)
-    datafields = data.datafields(scope)
-
-    # One row per data field. /data-fields already carries the dataset context
-    # (datasetid, datasetname, category, subcategory, region, delay, universe,
-    # pyramidMultiplier) with values identical to the dataset record, so only
-    # the dataset-only columns are joined in. coverage and dateCoverage exist
-    # at both levels with *different* values (field-level is the field's own
-    # value), so both are kept.
-    dataset_meta = datasets.rename(
-        columns={
-            "id": "datasetid",
-            "description": "dataset_description",
-            "valueScore": "dataset_valueScore",
-            "dateUpdated": "dataset_dateUpdated",
-            "coverage": "dataset_coverage",
-            "dateCoverage": "dataset_dateCoverage",
-        }
-    )[
-        [
-            "datasetid",
-            "dataset_description",
-            "dataset_valueScore",
-            "dataset_dateUpdated",
-            "dataset_coverage",
-            "dataset_dateCoverage",
-        ]
-    ]
-    fields = datafields.merge(dataset_meta, on="datasetid", how="left")
-    fields = fields[
-        [
-            "dateCreated",
-            "dataset_dateUpdated",
-            "region",
-            "delay",
-            "universe",
-            "id",
-            "description",
-            "type",
-            "datasetid",
-            "datasetname",
-            "dataset_description",
-            "categoryid",
-            "categoryname",
-            "subcategoryid",
-            "subcategoryname",
-            "dataset_valueScore",
-            "coverage",
-            "dateCoverage",
-            "pyramidMultiplier",
-        ]
-    ].rename(columns={"id": "fieldid", "description": "field_description"})
-
-    # Cache each field type separately: MATRIX and VECTOR feed different
-    # expression semantics, GROUP is not an alpha input at all, so keeping the
-    # three archives apart stops them being mixed in a backtest.
-    #
-    # Each archive holds the *raw* snapshot for its type, so the eligibility
-    # filter stays local and can be re-derived without re-downloading. Rows are
-    # stored in blocks and each column is a separate archive member, so a later
-    # lookup reads only the blocks and columns it needs instead of reparsing
-    # 41 MB of JSON.
-    catalog_frame_id = frame_id(fields["fieldid"])
-    paths = {}
-    for field_type in FIELD_TYPES:
-        subset = fields[fields["type"] == field_type].reset_index(drop=True)
-        paths[field_type] = save_cache(
-            scope,
-            subset,
-            field_type,
-            catalog_total=len(fields),
-            catalog_frame_id=catalog_frame_id,
-        )
-    return paths
+from Functions.cache import CATALOG_MAX_AGE_SECONDS, FIELD_TYPES
+from Functions.data import BrainData, CatalogBuilder
+from Functions.login import RELOGIN_THRESHOLD_SECONDS, BrainLogin
 
 
 def main():
@@ -115,84 +13,80 @@ def main():
 
     # Keep only fields that are populated enough to backtest on: the field's own
     # coverage (fraction of the universe the field is defined for) and its
-    # dateCoverage (fraction of the history the field spans) must both clear
-    # the threshold. dateCoverage is missing on ~4 % of records, and those rows
+    # dateCoverage (fraction of the history the field spans) must both clear the
+    # threshold. dateCoverage is missing on ~4 % of records, and those rows
     # fail the comparison.
     MIN_COVERAGE = 0.7
 
-    # Every valid scope tuple, enumerated in config/scopes.yaml. Only region /
-    # delay / universe vary: instrumentType is a platform constant (see
-    # Functions/data.py INSTRUMENT_TYPE).
-    scopes = load_scopes()
+    # Master switch for reaching the platform. True may log in and refetch; False
+    # keeps the run entirely on disk, reusing snapshots even after they age out.
+    LOGIN_ALLOW = False
+    print(f"LOGIN_ALLOW = {LOGIN_ALLOW}")
 
-    # The catalog is a moving target, so a scope is downloaded once and reused
-    # from disk afterwards: an existing cache folder means the snapshot is
-    # already pinned, and re-downloading it would only replace a reproducible
-    # snapshot with a different one.
-    paths_by_scope = {scope_key(scope): cached_scope(scope) for scope in scopes}
+    builder = CatalogBuilder(MIN_COVERAGE, refetch_stale=LOGIN_ALLOW)
 
     # One session serves every scope: logging in per scope would burn the
     # platform's login budget (5 per minute, 25 per day) for no reason.
+    login = BrainLogin()
     data = None
-    if any(paths is None for paths in paths_by_scope.values()):
-        login = BrainLogin()
+    if LOGIN_ALLOW and builder.needs_auth():
         s = login.get_session()
         if s is None:
             return
         print("Login successful. JWT:")
         print(login.get_token(s))
         data = BrainData(s, login.base_url)
-
-    display_cols = ["fieldid", "datasetid", "coverage", "dateCoverage"]
-    rng = np.random.default_rng()
-    totals = []
-
-    for scope in scopes:
-        paths = paths_by_scope[scope_key(scope)]
-        if paths is None:
-            paths = fetch_scope(data, scope)
-        else:
-            print(f"Cache hit for scope {scope_key(scope)}: reusing the cached catalog.")
-
-        n_eligible = 0
-        catalog_total = 0
-
-        for field_type in FIELD_TYPES:
-            path = paths[field_type]
-            cache = ScopeCache(path)
-            eligible = cache.eligible_positions(MIN_COVERAGE)
-            n_eligible += eligible.size
-            catalog_total = cache.catalog_total
+    else:
+        # run() fetches whatever it considers a miss, and with LOGIN_ALLOW off the
+        # only misses left are absent scopes. Completing that fetch would need a
+        # session this branch deliberately never opened.
+        if builder.needs_download():
+            print("LOGIN_ALLOW is False and the cache is incomplete; nothing fetched.")
+            return
+        # Reporting the countdown costs no login: check_login only reads the cached
+        # session, so it tells the user how much run time the current token still
+        # guarantees without spending any of the 25-logins/day budget.
+        s = login.load_session()
+        if s is not None:
+            expiry = login.check_login(s)
             print(
-                f"{scope_key(scope)} {field_type}: {cache.n_rows} rows, "
-                f"{eligible.size} eligible "
-                f"({eligible.size / max(cache.n_rows, 1):.1%}) -> "
-                f"cache/{path.parent.name}/{path.name} "
-                f"({path.stat().st_size / 1e6:.1f} MB, catalog_frame_id={cache.catalog_frame_id})"
+                f"Session valid for {expiry}s "
+                f"({expiry / 60:.1f} min); "
+                f"re-login at {RELOGIN_THRESHOLD_SECONDS}s remaining."
             )
 
-            # Draw five fields at random from the eligible positions, then read back
-            # only those rows and only the columns actually displayed — narrowing the
-            # column set avoids decompressing the other 15.
-            picked = np.sort(rng.choice(eligible, size=min(5, eligible.size), replace=False))
-            sampled = cache.take(picked, columns=display_cols)
-            print(sampled.to_string(index=False))
-            cache.close()
+    builder.run(data)
 
+    # Which cache expires first decides whether the next run needs a login, so the
+    # countdown is reported for the soonest-to-expire scope rather than all 41 — the
+    # run itself prints the one it actually samples.
+    soonest = None
+    for scope in builder.scopes:
+        paths = builder.cache.cached(scope)
+        if paths is None:
+            continue
+        left = builder.cache.expires_in_seconds(paths)
+        if soonest is None or left < soonest[0]:
+            soonest = (left, builder.cache.key(scope))
+    if soonest is not None:
+        left, key = soonest
+        state = "expired" if left <= 0 else "expires in"
         print(
-            f"{scope_key(scope)}: fields with coverage > {MIN_COVERAGE} and "
-            f"dateCoverage > {MIN_COVERAGE}: {n_eligible} / {catalog_total} "
-            f"({n_eligible / catalog_total:.1%})\n"
+            f"Cache ({len(builder.scopes)} scopes, {CATALOG_MAX_AGE_SECONDS / 86400:.0f}d max age): "
+            f"{key} {state} {abs(left):.0f}s ({abs(left) / 86400:.2f} d)"
         )
-        totals.append((scope_key(scope), n_eligible, catalog_total))
 
-    grand_eligible = sum(n for _, n, _ in totals)
-    grand_total = sum(t for _, _, t in totals)
-    print(
-        f"Scopes cached: {len(totals)} / {len(scopes)}; "
-        f"eligible fields across scopes: {grand_eligible} / {grand_total} "
-        f"({grand_eligible / grand_total:.1%})"
-    )
+    scope = builder.scopes[-1]
+    # A fresh seed per run keeps the draw from being anchored to a fixed
+    # constant, and printing it with the snapshot id keeps the run reproducible:
+    # seed + frame_id + scope replays this exact sample.
+    for field_type in FIELD_TYPES:
+        sample = builder.sample_field_ids(
+            scope["region"], scope["delay"], scope["universe"], field_type, 2
+        )
+        print(
+            f"{field_type}: {sample}\n"
+        )
 
 
 if __name__ == "__main__":
