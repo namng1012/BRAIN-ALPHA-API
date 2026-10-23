@@ -338,3 +338,15 @@ Một quyết định khác đáng ghi: chỉ in scope **hết hạn sớm nhấ
 **Reusable in:** Quota theo tháng, EOL của thư viện, TTL của cache key khác.
 
 **Sentiment:** 7 — reviewer sẽ hỏi "tại sao không hardcode 15 ngày trong chuỗi in?", và câu trả lời (buộc dùng chung hằng số quyết định) là điều đáng giữ.
+
+## 2026-10-23T07:12:00Z | code-technique | score: 7
+
+**Where:** `Functions/data.py` — `BrainData.operators()`; `main.py` — khối in bảng operator cuối `main()`
+
+**Pattern:** `/operators` là endpoint **duy nhất** của BRAIN không scope-scoped: không nhận `instrumentType`/`region`/`delay`/`universe`, trả list phẳng (không có `{"results": [...]}` như `/data-sets` và `/data-fields`), và `scope` là **list** cần `explode()`.
+
+**Why:** Đọc được `/operators` mà **không tốn login**: `login.load_session()` đọc cookie đã cache, `check_login` xác nhận còn sống, `GET /operators` trả 200 — quota 25/ngày không bị trừ. Khác `/data-fields`: cái đó cần `BrainData` có session nên `run(None)` chỉ an toàn khi cache đầy đủ, còn `/operators` không có cache layer (không cần — 103 record, ~0.2 MB) và chỉ cần một session bất kỳ.
+
+**Đo (2026-10-23, live):** 103 operator publish; `scope` = COMBO 101 / REGULAR 84 / SELECTION 27 → **84 REGULAR** trong 7 category: Time Series 30, Arithmetic 16, Logical 11, Group 10, Cross Sectional 7, Vector 7, Transformational 3. `level` chỉ có 2 giá trị thật: `"ALL"` (66/84) và `null` (18/84) — **không phải thiếu key** (đã kiểm tra: cả 103 record đều có key `level`), mà là platform chưa xếp hạng operator đó. `generate_stats`, `reduce_*`, `combo_a`, `self_corr` là COMBO-only; `in`, `universe_size` là SELECTION-only — không cái nào dùng được cho REGULAR alpha.
+
+**Reusable in:** Bất kỳ endpoint BRAIN nào cần trả lời "có thực sự cần session không" trước khi đưa vào đường cache-only — câu trả lời phụ thuộc endpoint có scope-scoped hay không, không phụ thuộc nó nằm chung "nhóm catalog".

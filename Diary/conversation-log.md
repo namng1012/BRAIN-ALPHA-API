@@ -489,3 +489,351 @@
 **Open questions:** `check_login()` chỉ gọi một lần lúc đầu, không giữ token sống suốt run dài (chi tiết ở `methodology.md`).
 
 **Sentiment:** 6 — chủ yếu là làm terminal dễ đọc, nhưng phát sinh một hệ quả cấu trúc đáng ghi (`run()` thành có giá trị trả về).
+
+## 2026-10-23T04:36:00Z | chat-summary | score: 6
+
+**Request:** "tôi vừa cập nhật git bằng lệnh pull bạn hãy scan lại toàn project để hiểu context" — scan lại toàn bộ repo sau `git pull`, không sửa code.
+
+**Outcome:** Đọc lại toàn bộ repo ở commit `2effd18 "finish random get fieldid"` (namduy1012, 2026-10-23 01:56). Code đã tái cấu trúc mạnh so với turn trước: `Functions/data.py` chia 3 tầng class (`BrainAPI` transport → `BrainData` catalog → `CatalogBuilder` pipeline), `Functions/cache.py` chia 2 tầng (`CatalogCache` folder-level → `ScopeCache` archive-level), và `main.py` rút còn 93 dòng. `Docs/random-field-pipeline-proposal.md` bị xoá, thay bằng `Docs/data-field-sampling.md` (402 dòng, trạng thái "ĐÃ TRIỂN KHAI"). Cache giờ đầy đủ **41/41 scope, 51.7 MB**.
+
+**Files touched:**
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** `uv run main.py` exit 0, in `LOGIN_ALLOW = False`, session còn 12 592 s, cache hết hạn sớm nhất `ASI_1_MINVOL10M` sau 14.98 d, và 2 field id mỗi type. Đối chiếu `config/scopes.yaml` (41 scope) với `cache/` (41 folder) → trùng khớp hoàn toàn, không có scope nào thiếu hay thừa.
+
+**Open questions:** (1) `main.py` vẫn chưa in **seed** thực tế dù `sample_field_ids` sinh seed từ `os.urandom(8)` và docstring nói "seed actually used is returned with the draw (see `main`)" — nhưng `main.py` chỉ in list field id ⇒ **draw không tái lập được**, đúng như cảnh báo ở entry `15:46:39Z` (code-technique score 7). (2) `main.py` sample trên `builder.scopes[-1]` — scope cuối cùng của YAML (`USA_1_TOPSP500`), không phải scope random. (3) `Docs/data-description.md` §5 còn hướng dẫn sửa biến `scope` trong `main.py` — biến đó không còn tồn tại.
+
+**Sentiment:** 6 — turn scan/re-orientation, không có thay đổi code; giá trị nằm ở việc xác định được khoảng cách giữa docstring và hành vi thực tế về seed.
+
+## 2026-10-23T04:40:00Z | chat-summary | score: 5
+
+**Request:** "phần 3. là gì" rồi "sửa lại" — hỏi nghĩa mục 3 trong danh sách 3 điểm (doc §5 còn mô tả `main.py` cũ), rồi yêu cầu sửa.
+
+**Outcome:** Viết lại `Docs/data-description.md` §5 cho khớp `main.py` hiện tại: scope đến từ `config/scopes.yaml` (41 scope) không phải biến `scope` trong `main.py`; thêm bảng hành vi 2 nhánh của cờ `LOGIN_ALLOW`; mô tả đúng output thực tế (countdown session, scope hết hạn sớm nhất, 2 field id mỗi type). Sửa luôn 2 chỗ khác trong cùng file: link chết `random-field-pipeline-proposal.md` → `data-field-sampling.md`, và thêm đính chính `TOPSP500` (ngoại lệ universe) trỏ về §2.2. Sửa câu "đây là scope dùng mặc định trong `main.py`" ở §2.
+
+**Files touched:**
+- `Docs/data-description.md` (§5 viết lại, 2 link/đính chính, §2 header)
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** `git diff --check` sạch. Quét link `.md` trong `Docs/` → không còn link chết.
+
+**Open questions:** Mục 1 (không in seed) và mục 2 (`main.py` sample trên `builder.scopes[-1]` = scope cuối YAML, không phải scope random) vẫn chưa xử lý.
+
+**Sentiment:** 5 — sửa tài liệu cho khớp code, không ảnh hưởng kết quả nghiên cứu; nhưng đây là loại việc mà reviewer không bao giờ hỏi, chỉ người đọc mới cần.
+
+## 2026-10-23T04:54:00Z | code-technique | score: 6
+
+**Where:** `Functions/data.py` — `CatalogBuilder.run()`; `main.py` — nhánh `else` của `if LOGIN_ALLOW and builder.needs_auth()`
+
+**Pattern:** Truyền `data=None` xuống một pipeline thay vì chặn ở đường dẫn lỗi, và để **caller** giữ bất biến "nếu không có session thì không được còn scope nào thiếu cache"
+
+**Why:** `data` là `BrainData` — nó giữ session, không giữ dữ liệu. `run()` chỉ dereference nó tại đúng một nhánh: `paths is None` → `fetch_scope(data, scope)` → `data.datasets(scope)`. Nên `run(None)` hợp lệ khi và chỉ khi mọi scope đã có trên đĩa; `AttributeError: 'NoneType' object has no attribute 'datasets'` là biểu hiện đúng khi bất biến đó bị phá. `run()` tự bảo vệ một nửa: `refetch_stale=False` ⇒ `stale_scopes()` trả `[]` ⇒ `stale=∅` ⇒ không scope nào đi qua `fetch_scope` dù đã hết hạn. Nửa còn lại (`needs_download()`) do `main()` guard, và mắt xích khép kín là `needs_auth() = needs_download() or bool(stale_scopes())` — không thể `needs_auth()=False` mà `needs_download()=True`.
+
+**Bài học (generalise):** khi một dependency là *session/token* chứ không phải *payload*, "truyền None" hợp lệ hơn "truyền object rỗng" — object rỗng là dữ liệu sai còn `None` là trạng thái thật. Nhưng nó chỉ an toàn khi bất biến "None ⇒ không còn việc nào cần nó" được **test ở caller**, không phải suy ra trong callee. `run()` cố ý không guard vì guard sẽ che mất việc caller quên kiểm tra — `AttributeError` là lỗi đúng, còn một `if data is None: return []` im lặng sẽ biến "cache thiếu" thành "không có kết quả".
+
+**Reusable in:** Mọi pipeline offline-first (`--no-network`, dry-run, cache-only) với dependency dạng credential/session; đặc biệt khi caller có nhiều nhánh quyết định dựa trên cùng một điều kiện với callee (`needs_auth` vs `needs_download`).
+
+**Sentiment:** 6 — không có gì mới về kỹ thuật, nhưng bất biến "None ⇒ không còn việc cần session" là loại mà reviewer hỏi khi thấy type `BrainData | None` mà không có guard ngay cạnh chỗ dùng.
+
+## 2026-10-23T07:12:00Z | chat-summary | score: 6
+
+**Request:** "kiểm tra ACE_API__Gold_ về việc đề cập đến số lượng fast language expression mà brain API cung cấp cho user để tạo alpha. sau đó edit ở main.py và xuất ra bảng các FASTEXPR Functions, lưu ý chỉ REGULAR alphas."
+
+**Outcome:** Thêm `BrainData.operators()` vào `Functions/data.py` (`GET /operators`, explode `scope` list) và khối in bảng operator cuối `main()`, lọc `scope == "REGULAR"`. Đo live: 103 operator publish, 84 REGULAR trong 7 category (Time Series 30, Arithmetic 16, Logical 11, Group 10, Cross Sectional 7, Vector 7, Transformational 3). Bảng in `name`, `definition`, `level` theo category, `definition` collapse whitespace (vì `bucket` nhiều dòng), `level` null → `-`.
+
+**Files touched:**
+- `Functions/data.py` (`BrainData.operators()`)
+- `main.py` (khối in bảng FASTEXPR cuối `main()`)
+- `Diary/code-technique.md` (endpoint pattern + số đo)
+- `Diary/methodology.md` (quyết định lọc theo `scope`, không lọc theo `level`)
+- `Diary/conversation-log.md` (entry này)
+
+**Open questions:** `/operators` không được cache (đúng — không scope-scoped, payload nhỏ), nên mỗi run gọi platform 1 lần. Nếu `LOGIN_ALLOW=False` và session cache đã hết hạn thì `check_login` trả 0 → `s` vẫn là session object (không None) nhưng `GET /operators` trả 401 → `_get` raise. Ngược lại nếu `load_session()` trả None (chưa từng login) thì khối bị bỏ qua im lặng, run vẫn thành công nhưng không in bảng.
+
+**Sentiment:** 6 — feature nhỏ, số đo sạch, nhưng phát sinh một câu hỏi thiết kế thật về offline run.
+
+## 2026-10-23T07:20:00Z | chat-summary | score: 5
+
+**Request:** "bạn nên reverse những gì bạn thêm ở `Functions/data.py` chúng ta chỉ thử ở `main.py`" — sau khi đã thêm `BrainData.operators()`.
+
+**Outcome:** Gỡ `BrainData.operators()` khỏi `Functions/data.py` (diff file này giờ rỗng so với HEAD). Toàn bộ đọc `/operators` + `explode("scope")` + lọc REGULAR + định dạng bảng chuyển vào cuối `main()`, dùng `BrainData._get()` sẵn có + thêm `import pandas as pd`. Output giống hệt bản trước: 103 published / 84 REGULAR / 7 category.
+
+**Files touched:**
+- `Functions/data.py` (revert — về nguyên trạng)
+- `main.py` (`import pandas as pd` + khối in bảng FASTEXPR)
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** `git diff Functions/data.py` rỗng. `uv run main.py` chạy đúng, 84 REGULAR in ra như cũ.
+
+**Open questions:** `main.py` giờ gọi `BrainData._get()` — method có tiền tố gạch dưới, tức là private theo quy ước, nhưng đây là lần đầu `main.py` chạm vào tầng transport. Nếu sau này operator trở thành một phần thật của pipeline thì chỗ gọi đúng là method công khai, không phải `main()` — nhưng lúc này thêm nó là over-engineering.
+
+**Sentiment:** 5 — thu hồi một abstraction sớm, đúng hướng; giá trị chỉ là giữ `Functions/data.py` không bị nhiễm bởi một endpoint chưa ai dùng ngoài `main()`.
+
+## 2026-10-23T07:30:00Z | chat-summary | score: 6
+
+**Request:** "tôi cần bạn cái tạo một chút main.py (96-119) — thay vì chia thành nhiều category thì hãy chia thành 3 category: (1) chỉ dành cho dữ liệu matrix, đặc điểm là args input bao hàm x, hoặc x,y, hoặc nhiều hơn như min/max; (2) dành cho dữ liệu vector biến đổi thành matrix, đặc điểm là luôn có bắt đầu bằng `vec_`; (3) dành cho grouping, đặc điểm là args bao gồm cả matrix và group."
+
+**Outcome:** Thay vòng lặp theo `category` của platform bằng 3 bucket theo **data field type** đầu vào: MATRIX 67 / VECTOR→MATRIX 7 / GROUP 10 (= 84 REGULAR). Bucket VECTOR dùng tiền tố `vec_`; bucket GROUP dùng tiền tố `group_` **hoặc** regex `\bgroup\b` trong `definition`; phần còn lại là MATRIX.
+
+**Files touched:**
+- `main.py` (`import re`; khối in bảng FASTEXPR viết lại hoàn toàn)
+- `Diary/conversation-log.md` (entry này)
+
+**Verify:** `uv run main.py` → 67 + 7 + 10 = 84 ✓. Cross-check với `category` của platform: `pd.crosstab` cho thấy bucket khớp **1-1 tuyệt đối** — `Vector` 7/7 vào VECTOR, `Group` 10/10 vào GROUP, 5 category còn lại 67/67 vào MATRIX. Không bucket nào rỗng, không operator nào rơi cả hai hoặc thuộc cả hai (overlap vec_ ∧ group = 0).
+
+**Open questions:** 6 operator MATRIX không có arg tên `x`/`y`/`input` nào trong `definition` vì chúng viết bằng **infix operator** chứ không phải hàm: `less` → `input1 < input2`, `greater` → `input1 > input2`, `equal`, `not_equal`, `less_equal`, `greater_equal`, cộng `ts_step(1)` (hằng số, không input) và `bucket` (lồng `rank(x)`). Chúng vẫn đúng là MATRIX vì đều nhận matrix field ở hai vế, nhưng nếu sau này viết parser args tự động để sinh expression thì 6 operator này sẽ không có arg nào để điền.
+
+**Sentiment:** 6 — việc bucket khớp 1-1 với `category` của platform là bằng chứng mạnh cho quy tắc phân loại, nhưng phát hiện nhóm infix operator là điểm sẽ cản bước sinh expression tự động sau này.
+
+## 2026-10-23T07:38:00Z | chat-summary | score: 5
+
+**Request:** "display có vẻ sai phải chỉ có 3 category thôi" — user paste terminal output có 5 header GROUP lặp lại, các operator `vec_*` trộn vào bucket GROUP.
+
+**Outcome:** Không sửa code. `main.py` chỉ có đúng 3 bucket và 1 vòng lặp `for title, rows in buckets`; không có đường nào in cùng một bucket 5 lần. Verify bằng cách redirect stdout ra file: 94 dòng, đúng 3 header, đúng 84 dòng operator (67+7+10).
+
+**Files touched:**
+- `Diary/conversation-log.md` (entry này)
+
+**Root cause:** Terminal file của IDE đang trộn output của **nhiều process**. Bằng chứng: output bị lẫn có `LOGIN_ALLOW`/`Session valid` nhưng **thiếu** 3 block `Cache (...)` + `MATRIX/VECTOR/GROUP: [...]` sample mà `main.py` vẫn in ở HEAD — tức là nó là ghép của output các lần chạy khác nhau trong lúc tôi đang verify song song (`Select-Object -First 14` và `Select-Object -Last 12` là 2 invocation riêng). `uv run main.py` chạy một lần là ra.
+
+**Open questions:** Không có.
+
+**Sentiment:** 5 — đây là false alarm do môi trường, không phải bug; đáng ghi vì nếu không redirect ra file thì rất dễ lần sau đi sửa nhầm code đúng.
+
+## 2026-10-23T07:46:00Z | chat-summary | score: 6
+
+**Request:** Tách `bucket`, `densify`, `group_cartesian_product` ra khỏi bucket cũ thành **category thứ 4**.
+
+**Outcome:** 4 bucket: MATRIX 65 / VECTOR 7 / GROUP 9 / GROUPING 3 = 84. Đổi tên `is_group` (hàm `re.search`) thành hai boolean vector `is_vec` / `names_group` / `is_grouping`; gỡ `import re` vì không còn dùng.
+
+**Files touched:**
+- `main.py` (khối phân loại operator; gỡ `import re`)
+- `Diary/conversation-log.md` (entry này)
+
+**Quy tắc phân loại mới:**
+- `is_grouping` = `name.isin(["bucket", "densify"])` ∪ (`group_` prefix ∧ definition **không** chứa `\bgroup\b`) → bắt đúng 3 operator được yêu cầu.
+- `bucket` + `densify` được **hard-code tên** thay vì match prose, vì typing của chúng chỉ được mô tả bằng lời trong `description` ("creates custom groups…", "Converts a grouping field…"). Match vào prose sẽ hỏng ngay ngày WorldQuant đổi câu chữ.
+- `group_cartesian_product` nhận diện **cấu trúc**: là operator `group_` duy nhất không nêu đối số tên `group`.
+
+**Open questions:** Không.
+
+**Sentiment:** 6 — hard-code tên 2 operator là đánh đổi có chủ đích giữa "tự động" và "đúng"; đã ghi rõ trong comment để reviewer hỏi thì có sẵn câu trả lời.
+
+## 2026-10-23T07:46:00Z | methodology | score: 7
+
+**Decision:** Tách 4 data field type thay vì 3: MATRIX / VECTOR / GROUP / **GROUPING** (`bucket`, `densify`, `group_cartesian_product`).
+
+**Alternatives considered:**
+- Gộp `bucket` + `densify` vào GROUP, chỉ giữ `group_cartesian_product` riêng — `bucket` **sinh** group mới từ một matrix field (`rank(x)` rồi chia bucket), `densify` **nén** một grouping field. Cả hai đều là group→group hoặc matrix→group, không phải matrix→matrix. Trộn chúng vào GROUP sẽ phá vỡ bất biến "GROUP nhận group field" mà 9 operator kia giữ.
+- Xếp theo `category` của platform (`bucket` = `Transformational`, `densify` = `Arithmetic`, `group_cartesian_product` = `Group`) — 3 operator này nằm rải rác 3 category khác nhau, nên `category` không đại diện cho typing. Đây là bằng chứng thứ hai cho quyết định bỏ `category` từ turn trước.
+
+**Rationale:** Câu hỏi cần trả lời khi sinh expression là "operator này **nhận** field type gì và **trả về** gì", và đó là hàm ý của biểu đồ typing, không phải phân loại theo hành vi toán học. Bucket 4 đóng vai trò node trung gian trong cấu trúc: `matrix --bucket--> group` và `group --densify--> group`, `group --group_cartesian_product--> group`. Điều này có nghĩa là biểu đồ typing của FASTEXPR **không phải cây** — group là cả input và output. Nếu bước sinh expression sau này giả định mọi operator là matrix→matrix thì nó sẽ đặt `bucket` sai chỗ (ngoài expression, thành setting) và sinh ra expression không compile được.
+
+**Impact on reported results:** Không đổi con số nào. Đổi số phân bố: MATRIX 67→65, GROUP 10→9, GROUPING mới = 3.
+
+## 2026-10-23T07:53:00Z | chat-summary | score: 7
+
+**Request:** Tách `if_else` + `trade_when` ra 1 group, và `max` + `min` + `multiply` ra 1 group khác.
+
+**Outcome:** 6 bucket: MATRIX 60 / VARIADIC 3 / SELECT 2 / VECTOR 7 / GROUP 9 / GROUPING 3 = 84. Thêm helper `arg_names(definition)` trong `main.py` để parse tên đối số top-level của lời gọi đầu tiên trong definition (cân bằng ngoặc, bỏ giá trị mặc định).
+
+**Files touched:**
+- `main.py` (thêm `import re`; thêm `arg_names`; thêm 2 bucket; 6 bucket tổng cộng)
+- `Diary/conversation-log.md` (entry này)
+
+**Quy tắc phân loại — cấu trúc, không hard-code tên:**
+- **VARIADIC** = definition chứa `..` (dấu variadic của chính platform) → đúng `max(x, y, ..)`, `min(x, y ..)`, `multiply(x ,y, ... , filter=false)`. Kiểm chứng: không operator nào khác chứa `..`.
+- **SELECT** = mọi đối số đều là data field (`x,y,z,input,input1,input2,input3`) **và** ≥3 đối số → đúng `if_else(input1, input2, input 3)`, `trade_when(x, y, z)`. Kiểm chứng: không operator nào khác thoả cả hai điều kiện.
+- 2 quy tắc **không overlap** với nhau và không trùng các bucket cũ.
+
+**Open questions:** Không.
+
+**Sentiment:** 7 — đây là turn đáng chú ý vì 2 group mới đều được nhận diện bằng **cấu trúc** thay vì liệt kê tên, nên bền vững với catalog thay đổi; đã verify bằng "không có false positive" chứ không chỉ "match đúng".
+
+## 2026-10-23T07:53:00Z | code-technique | score: 7
+
+**Where:** `main.py` — `arg_names(definition)`
+
+**Pattern:** Parse tên đối số top-level của lời gọi đầu tiên trong một FASTEXPR definition, bằng cách quét cân bằng ngoặc thay vì regex.
+
+**Why:** Regex kiểu `\((.*?)\)` cắt sai ở `bucket(rank(x), range=...)` (ngoặc lồng) và ở `max(x, y, ..)` khi có nhiều ngoặc. Quét cân bằng ngoặc + tách theo dấu phẩy ở depth 0 là cách duy nhất lấy đúng tên đối số. Cần 2 bước: (1) cắt phần trong ngoặc ngoài cùng, (2) tách `,` chỉ khi depth == 0, để `rank(x)` không bị tách.
+
+**Reusable in:** bước sinh expression tự động — cần biết arity và tên đối số của từng operator để điền data field vào đúng vị trí.
+
+**Sentiment:** 7 — reviewer sẽ hỏi "tại sao không regex", và câu trả lời nằm ngay trong comment; đồng thời đây là nền cho bước sinh expression sắp tới.
+
+## 2026-10-23T07:53:00Z | methodology | score: 6
+
+**Decision:** Thêm 2 bucket: VARIADIC (arity mở) và SELECT (3 data field, 1 làm điều kiện).
+
+**Alternatives considered:**
+- Hard-code tên (`max`,`min`,`multiply`,`if_else`,`trade_when`) — nhanh nhưng đứt khi catalog thay operator; 2 quy tắc cấu trúc đã verify không có false positive nên không cần đánh đổi đó.
+- Gộp `if_else`/`trade_when` vào MATRIX — chúng vẫn là matrix→matrix, nhưng về mặt *sinh expression* chúng khác: `if_else`/`trade_when` có **vị trí đối số mang ý nghĩa** (condition ở vị trí 1), trong khi `ts_sum(x, d)` có `d` là tham số cấu hình, không phải data field. Tách riêng là để bước sinh expression biết đối số nào điền data field, đối số nào điền hằng số.
+- Gộp `max`/`min`/`multiply` vào MATRIX — chúng vẫn là matrix→matrix, nhưng arity mở nên số data field điền vào là **không xác định trước**.
+
+**Rationale:** Ba bucket này (MATRIX, VARIADIC, SELECT) cùng trả về matrix, tức chúng tạo thành một "lớp" trong typing. Tách chúng không phải vì khác kiểu dữ liệu, mà vì khác **ràng buộc arity** — đây là thứ quyết định độ phức tạp của bước sinh expression. `ts_sum(x, d)` arity cố định, `max(x, y, ..)` arity mở, `if_else(a, b, c)` arity cố định nhưng có vị trí điều kiện.
+
+**Impact on reported results:** Không đổi con số nào. Phân bố: MATRIX 65→60, thêm VARIADIC 3 và SELECT 2.
+
+## 2026-10-23T08:01:00Z | chat-summary | score: 7
+
+**Request:** Tách các operator optional liên quan logic và boolean ra 1 category.
+
+**Outcome:** 7 bucket: MATRIX 50 / VARIADIC 3 / SELECT 2 / BOOLEAN 10 / VECTOR 7 / GROUP 9 / GROUPING 3 = 84.
+
+**Files touched:**
+- `main.py` (thêm `is_boolean`, bucket BOOLEAN, cập nhật comment khối phân loại)
+- `Diary/conversation-log.md` (entry này)
+
+**Quy tắc:** `is_boolean = (category == "Logical") & ~is_select` → 10 operator: `and or not is_nan less equal greater not_equal less_equal greater_equal`. Lần này **dùng field `category` của platform** thay vì parse definition — khác với 2 bucket trước, ở đây platform đã cung cấp sẵn nhãn nên không cần tự suy luận.
+
+**Precedence đã chọn:** SELECT thắng BOOLEAN. `if_else` bị platform xếp `Logical` nhưng thực chất là value selector (trả về 1 trong 2 giá trị), không phải mask; để nó ở BOOLEAN sẽ đặt sai vị trí trong typing graph.
+
+**Open questions:** Không.
+
+**Sentiment:** 7 — phát hiện `category` là nhãn sẵn có của platform làm bỏ được việc tự parse definition cho nhóm boolean; nhưng phải xử lý xung đột với SELECT, đã ghi rõ thứ tự ưu tiên.
+
+## 2026-10-23T08:01:00Z | methodology | score: 7
+
+**Decision:** Bucket BOOLEAN dùng `category == "Logical"` của platform, trừ `is_select`.
+
+**Alternatives considered:**
+- Parse definition tìm toán tử so sánh (`==`, `!=`, `<`, `>`, `<=`, `>=`) để bắt 6 operator infix — định nghĩa rõ nhưng bỏ sót `and`/`or`/`not`/`is_nan` vì chúng dùng dạng hàm chứ không có toán tử. Phải bổ sung hard-code → tệ hơn dùng `category`.
+- Gộp BOOLEAN vào SELECT — sai vì SELECT trả về *giá trị*, BOOLEAN trả về *mask*. Trong biểu đồ typing, BOOLEAN là đầu vào bắt buộc của SELECT (vị trí condition), còn không phải đồng nhất với nó.
+
+**Rationale:** Đây là lần đầu dùng nhãn `category` của platform thay vì suy luận từ `definition`. Lý do: platform đã **grade** 103 operator và gán 7 category này, nên nó là metadata chính thức; suy luận từ definition chỉ nên dùng khi platform không cung cấp nhãn (như `bucket`/`densify`, vốn chỉ mô tả typing bằng prose). Cần kiểm tra 2 điều trước khi tin: (1) `category` có phủ hết 84 REGULAR operator không — có, không có NaN; (2) một operator có thể thuộc 2 category không — không, mỗi row đúng 1 category.
+
+**Impact on reported results:** Không đổi con số. Phân bố: MATRIX 60→50, BOOLEAN mới = 10. Đáng chú ý về mặt nghiên cứu: 10/84 operator (~12%) là mask, tức gần 1 phần 8 biểu thức FASTEXPR sinh ra sẽ mang điều kiện chứ không phải tín hiệu số — đây là tỷ lệ mà bước sinh expression sau này cần dùng để ước lượng chi phí search.
+
+## 2026-10-23T08:12:00Z | chat-summary | score: 8
+
+**Request:** "Session valid for 31s (0.5 min); re-login at 1000s remaining." — kiểm tra logic trong `main.py` và `Functions/login.py` tại sao không relogin.
+
+**Outcome:** Chẩn đoán (chưa sửa code): `main.py:36` gate relogin bằng `builder.needs_auth()` — một điều kiện về **catalog cache**, không liên quan gì đến hạn token. Khi cache còn tốt thì `get_session()` không bao giờ được gọi, nên phép so `expiry > RELOGIN_THRESHOLD_SECONDS` bên trong `get_session` không bao giờ chạy.
+
+**Files touched:**
+- `Diary/conversation-log.md` (entry này)
+
+**Bằng chứng thu thập:**
+- Terminal: dòng `Session valid for 31s` chỉ nằm trong nhánh `else` ⇒ `builder.needs_auth()` đã trả False trong run đó.
+- Probe live: `CatalogBuilder(0.7, refetch_stale=True)` → `needs_download=False`, `stale_scopes=0`, `needs_auth=False`.
+- Decode JWT cookie `t` từ `.brain/session.json`: `exp=1792742765` = `2026-10-23T08:06:05Z`; run diễn ra ~08:05:34Z ⇒ còn 31s, thấp hơn threshold 1000s gấp 32 lần.
+- `GET /authentication` trên session đã chết trả **204 No Content** (body rỗng) ⇒ `check_login` nuốt exception và trả 0. Trên session sống nó trả 200 + JSON `{"token": {"expiry": ...}}`.
+
+**Open questions:** Cần user chốt có sửa hay không — bản sửa làm thay đổi *khi nào* một login bị tiêu, tức có tác động lên budget 25 logins/day (externally visible).
+
+**Sentiment:** 8 — turn này phát hiện một lỗi kiến trúc thật (coupling giữa cache state và session state) chứ không phải lỗi typo; có đủ bằng chứng live để không cần suy đoán.
+
+## 2026-10-23T08:12:00Z | methodology | score: 7
+
+**Decision:** (chưa áp dụng) Tách quyết định "có cần login không" khỏi quyết định "có cần refetch catalog không".
+
+**Alternatives considered:**
+- Chỉ sửa điều kiện thành `if LOGIN_ALLOW:` (gọi `get_session()` luôn) — `get_session()` tự quyết định: chỉ login thật khi `expiry <= 1000`. Trong steady state điều này **không** tốn thêm login (token sống lâu hơn nhiều so với 1000s), nên giữ được budget.
+- Cache payload `/operators` xuống đĩa như catalog — xoá được lý do cần session cho mọi run, nhưng thay đổi lớn hơn và `/operators` không scope-scoped nên cache key phải khác.
+- Hạ `RELOGIN_THRESHOLD_SECONDS` xuống (ví dụ 100s) — không giải quyết gốc rễ: `get_session()` vẫn chưa bao giờ được gọi.
+
+**Rationale:** `RELOGIN_THRESHOLD_SECONDS` được đặt ở `login.py` để "re-auth trước khi session chết, để không bao giờ thấy session chết giữa run" — nhưng nguyên tắc đó chỉ được thực thi trong `get_session()`, mà `main.py` chỉ gọi nó khi catalog cần refetch. Run nào catalog còn tốt thì không hề có cơ chế bảo vệ token, dù run đó vẫn đọc `/operators` bằng đúng session đó (`main.py:99`). Đây là mâu thuẫn giữa *ý định* (login.py) và *điều kiện* (main.py).
+
+**Impact on reported results:** Chưa có thay đổi nào. Nếu áp dụng: số login thực tế trong steady state không đổi, nhưng mọi run sẽ đảm bảo token còn >1000s — thay đổi *số lần* token chết giữa run từ "không xác định" xuống 0.
+
+## 2026-10-23T08:25:00Z | chat-summary | score: 7
+
+**Request:** "Session valid for 31s..." — kiểm tra logic relogin. Sau đó: xoá file rác.
+
+**Outcome:** Đã sửa `main.py` — bỏ gate `builder.needs_auth()` khỏi điều kiện login, chỉ còn `if LOGIN_ALLOW:`. `get_session()` tự quyết định dựa trên hạn token. Đã xoá 3 file rác: `out.txt`, `main_v0.py`, `.brain/operators_raw.json`.
+
+**Files touched:**
+- `main.py` (nhánh login: `if LOGIN_ALLOW:` + comment giải thích 2 quyết định độc lập)
+- `Diary/conversation-log.md` (entry này)
+
+**Xoá:**
+- `out.txt` — output tạm của shell redirect.
+- `main_v0.py` — bản backup cũ của `main.py` (untracked, không được tham chiếu ở đâu). Nội dung nó chính là bug đã sửa (`if LOGIN_ALLOW and builder.needs_auth()`), nên giữ lại chỉ là cái bẫy cho người sau.
+- `.brain/operators_raw.json` — 36KB dump của `/operators`, untracked + gitignored, không code nào đọc (`grep` toàn repo = 0 match), `main.py` fetch lại mỗi run.
+
+**Giữ lại:** `.brain/session.json` (cache session — cần thiết), `__pycache__/` (gitignored, tự sinh lại).
+
+**Kiểm chứng:** fake-based test (tự viết, xoá sau) với 2 assertion — token chết → `start_session` gọi đúng 1 lần; token sống (5000s) → `start_session` không được gọi. Cả 2 PASS. Test dùng `state_dir` tạm nên không chạm session cache thật.
+
+**Open questions:** Không.
+
+**Sentiment:** 7 — lỗi kiến trúc đã sửa và có test chứng minh 2 chiều (không login thừa, không login thiếu); điểm còn lại là `except Exception` trong `check_login` vẫn chưa được tách (user chọn không sửa phần này).
+
+## 2026-10-23T08:25:00Z | code-technique | score: 7
+
+**Where:** `main.py` — nhánh login của `main()`; test tạm dùng monkeypatch `BrainLogin.check_login` / `BrainLogin.start_session` / `BrainData._get`.
+
+**Pattern:** Verify logic đăng nhập mà **không** tốn login thật: patch `check_login` trả số giả (0 = chết, 5000 = sống), patch `start_session` đếm số lần gọi, patch `BrainData._get` trả payload giả, và ép `BrainLogin(state_dir=<tmpdir>)` để không ghi đè session cache thật.
+
+**Why:** Login persona cần browser + tốn budget 25 lần/ngày, nên không thể test bằng live run. Monkeypatch ở method level cho phép kiểm chứng *cả hai* nhánh của quyết định (login vs không login) trong vài giây. Lưu ý kỹ thuật: `save_session` duyệt `s.cookies` bằng `c.name`/`c.domain` — nên fake session phải dùng `requests.cookies.RequestsCookieJar` thật, không phải dict, nếu không sẽ crash với `AttributeError: 'str' object has no attribute 'name'`.
+
+**Reusable in:** mọi thay đổi liên quan auth/session trong project này; cũng là cách test `CatalogBuilder.run(None)` (no-auth path) mà không đụng platform.
+
+**Sentiment:** 7 — mẫu test này có thể tái dùng cho cả nhánh `LOGIN_ALLOW=False`; reviewer sẽ đánh giá cao vì nó chứng minh budget login không bị tăng.
+
+## 2026-10-23T08:45:00Z | chat-summary | score: 7
+
+**Request:** Quay lại phân loại category trong `main.py`: tách 9 operator nhận đúng 2 matrix field (add, divide, power, signed_power, subtract, ts_corr, ts_covariance, ts_regression, vector_neut) thành 1 subcategory riêng của MATRIX, phần còn lại thành subcategory khác. Thêm note: `ts_step` là func đặc biệt, sẽ đi chung với `ts_regression` nếu cần.
+
+**Outcome:** MATRIX (50) tách thành 3: MATRIX BINARY 9, MATRIX UNARY 40, MATRIX CONSTANT 1 (`ts_step`). Tổng 9 bucket vẫn = 84.
+
+**Files touched:**
+- `main.py` (thêm `n_matrix_inputs`, `is_binary_matrix`, `is_unary_matrix`, `is_step`; tách bucket MATRIX)
+- `Diary/conversation-log.md` (entry này)
+
+**Quy tắc đếm:** đếm **chỉ** các data-field argument (`x, y, z, input*`), bỏ qua argument số/từ khoá (`d, k, lag, rettype, filter, std`). Nên `ts_corr(x, y, d)` = 2 input, `ts_mean(x, d)` = 1 input. Nếu đếm mọi argument thì `ts_mean` sẽ ra 2 và rơi nhầm vào BINARY.
+
+**Open questions:** `ts_step` được xếp bucket riêng (MATRIX CONSTANT) chứ không gộp vào BINARY với `ts_regression`, vì `ts_step(1)` không nhận matrix field nào — nó là hằng số đếm ngày. Nếu ý user là muốn `ts_step` dùng chung *ngữ cảnh* với `ts_regression` (tức `ts_regression(y, x, d)` có thể dùng `ts_step` làm `x` để hồi quy theo thời gian), thì đó là quan hệ *sử dụng*, không phải quan hệ *typing*, nên không nên gộp bucket. Đã nêu rõ để user quyết.
+
+**Sentiment:** 7 — subcategory tách đúng 9/9 operator user liệt kê, khớp chính xác; điểm chưa chốt là ý nghĩa của note về `ts_step`.
+
+## 2026-10-23T08:45:00Z | methodology | score: 7
+
+**Decision:** Tách MATRIX theo **số matrix field tiêu thụ** (1 / 2 / 0), không theo platform `category`.
+
+**Alternatives considered:**
+- Dùng `category == "Arithmetic"` của platform cho nhóm binary — hụt: `ts_corr`, `ts_covariance`, `ts_regression` thuộc category "Time Series", `vector_neut` thuộc "Cross Sectional". Nhóm binary cắt ngang category nên phải suy ra từ arity.
+- Đếm mọi argument của definition — sai: `ts_mean(x, d)`, `ts_sum(x, d)` có 2 argument nhưng chỉ 1 matrix field; chúng sẽ rơi nhầm vào BINARY và BINARY sẽ thành ~35 operator, mất ý nghĩa.
+
+**Rationale:** Arity trên *data field* là thuộc tính typing thật, và nó tách đúng một ranh giới có ý nghĩa trong nghiên cứu alpha: chỉ 9 operator trong 84 là nơi hai field độc lập gặp nhau, tức nơi một quan hệ *pairwise* có thể được biểu đạt. Tỷ lệ này là con số đáng dùng khi ước lượng chi phí search: sinh một biểu thức có 2 field ngẫu nhiên là chuyện khác hẳn so với lấy 1 field rồi biến đổi.
+
+**Impact on reported results:** Không đổi số liệu nào, chỉ đổi cách trình bày phân loại. Nhưng nó làm lộ một thực tế đáng lưu ý: 40/50 operator MATRIX là unary — tức phần lớn biểu thức FASTEXPR là *biến đổi* của một field, không phải *kết hợp* của nhiều field.
+
+## 2026-10-23T09:05:00Z | chat-summary | score: 6
+
+**Request:** Xuất CSV 4 cột từ `main.py`: func name, category, biểu diễn trong BRAIN (vd `abs(x)`), description.
+
+**Outcome:** Tạo `operators.csv` ở thư mục gốc — 84 dòng (mọi REGULAR operator), 4 cột `name, category, expression, description`, không null. Category lấy từ bucket do code phân loại (dùng key ngắn `MATRIX_UNARY` thay vì title dài có em-dash).
+
+**Files touched:**
+- `main.py` (thêm `OPERATORS_CSV_PATH`, thêm key vào tuple bucket, ghi CSV)
+- `operators.csv` (mới, 84 dòng)
+- `Diary/conversation-log.md` (entry này)
+
+**Quyết định thiết kế:** tuple bucket đổi từ 2 phần tử (`title, rows`) thành 3 (`key, title, rows`). `key` là category ngắn dùng cho CSV, `title` là chuỗi in ra console (giữ nguyên nội dung để không đổi output hiển thị). Nhờ vậy printout và CSV dùng chung một nguồn phân loại — không thể lệch nhau.
+
+**Kiểm chứng:** đọc lại CSV bằng pandas → shape (84, 4), 0 null mọi cột, value_counts khớp 9 bucket (40/10/9/9/7/3/3/2/1). 2 description chứa newline (pasteurize, sign) — pandas đọc lại đúng vì CSV quote chuẩn; vẫn nên biết khi parse bằng tool khác.
+
+**Open questions:** `operators.csv` đang untracked. Các CSV khác trong repo (`datafields.csv`, `sweep_*.csv`) cũng untracked — nếu muốn commit thì cần `git add`, nhưng tôi không tự stage file (không thuộc scope yêu cầu).
+
+**Sentiment:** 6 — breadcrumb đơn giản, đúng phạm vi, nhưng có giá trị vì CSV này là input cho bước sinh expression sau này.
+
+## 2026-10-23T09:12:00Z | chat-summary | score: 4
+
+**Request:** "category trong `operators.csv` nên được sắp xếp đồng nhất theo cột category."
+
+**Outcome:** CSV sort theo `(thứ tự khai báo bucket, name)` thay vì chỉ theo `name`. 9 category thành 9 khối liền nhau, đúng thứ tự console printout.
+
+**Files touched:**
+- `main.py` (thêm `category_rank`, `sort_values(["_rank", "name"])`)
+- `operators.csv` (sinh lại)
+- `Diary/conversation-log.md` (entry này)
+
+**Quyết định:** giữ thứ tự khai báo bucket (MATRIX_BINARY → UNARY → CONSTANT → VARIADIC → SELECT → BOOLEAN → VECTOR → GROUP → GROUPING) chứ không sort alphabet. Lý do: thứ tự khai báo bám data flow của một biểu thức FASTEXPR; sort alphabet sẽ đưa BOOLEAN lên đầu và chia nhỏ các khối — mất liên kết giữa CSV và console printout.
+
+**Kiểm chứng:** 84 dòng, 0 null, `category.nunique()==9`, mỗi category đúng 1 khối liền (`groupby` trên run-length 9 nhóm, mỗi nhóm internally sorted by name: tất cả True).
+
+**Open questions:** không.
+
+**Sentiment:** 4 — thay đổi thuần trình bày, không có quyết định khoa học nào.

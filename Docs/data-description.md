@@ -56,7 +56,7 @@ Trong 30 cặp trên chỉ có **21 tên universe distinct** — cùng một tê
 
 ## 2. Snapshot catalog — scope `EQUITY / USA / delay 1 / TOP3000`
 
-Đây là scope dùng mặc định trong `main.py`. Số liệu dưới đây **thuộc về scope này**, không phải số liệu toàn platform.
+Số liệu dưới đây **thuộc về scope này**, không phải số liệu toàn platform. Đây là scope dùng để đo trong tài liệu; `main.py` hiện duyệt toàn bộ 41 scope trong `config/scopes.yaml`.
 
 ```
 Datasets: 286      Data fields: 75926
@@ -163,7 +163,9 @@ Chỉ `MATRIX` và `VECTOR` mới dùng được trực tiếp làm input của 
 
 **Không cộng dồn số field giữa các scope.** Cùng một field (vd. một field trong dataset Price Volume) xuất hiện ở nhiều universe trong cùng region, và có thể ở cả nhiều region. Tổng `n_datafields` của 44 scope **không phải** kích thước catalog, chỉ là tổng số scope-field. Muốn kích thước catalog thật thì phải deduplicate theo `id`.
 
-> **Cập nhật (2026-10-21, đo trực tiếp):** giả định "cùng field xuất hiện ở nhiều universe" ở trên cần đính chính — đo trên tập id cho thấy `universe` **không làm thay đổi tập field id** (`USA/1/TOP3000` và `USA/1/TOP500` trả về *đúng* 75 926 id giống nhau, Jaccard = 1.000). Chỉ `region` và `delay` mới thay đổi tập id. Chi tiết và hệ quả thiết kế: [random-field-pipeline-proposal.md](random-field-pipeline-proposal.md) §2.
+> **Cập nhật (2026-10-21, đo trực tiếp):** giả định "cùng field xuất hiện ở nhiều universe" ở trên cần đính chính — đo trên tập id cho thấy `universe` **không làm thay đổi tập field id** (`USA/1/TOP3000` và `USA/1/TOP500` trả về *đúng* 75 926 id giống nhau, Jaccard = 1.000). Chỉ `region` và `delay` mới thay đổi tập id. Chi tiết và hệ quả thiết kế: [data-field-sampling.md](data-field-sampling.md) §2.
+>
+> **Cập nhật (2026-10-23):** kết luận trên chỉ đúng với các universe giới hạn theo **số lượng instrument**. `TOPSP500` (super-sector) là ngoại lệ đo được: tập id của nó là tập con thật của `TOP3000` (74 769 vs 75 926 field) → xem [data-field-sampling.md](data-field-sampling.md) §2.2.
 
 ## 5. Cách tái lập snapshot
 
@@ -171,15 +173,18 @@ Chỉ `MATRIX` và `VECTOR` mới dùng được trực tiếp làm input của 
 uv run main.py
 ```
 
-In ra: số dataset, số data field, danh sách cột, breakdown theo `type` và theo `categoryname`, cho scope mặc định `EQUITY / USA / 1 / TOP3000`.
+`main.py` **không còn nhận scope qua tham số**. Tập scope đọc từ `config/scopes.yaml` (41 scope hợp lệ) và `CatalogBuilder` duyệt hết; cờ `LOGIN_ALLOW` ở đầu `main()` quyết định run có được gọi platform hay không:
 
-Để đổi scope, sửa biến `scope` trong `main.py`:
+| `LOGIN_ALLOW` | Hành vi |
+| --- | --- |
+| `False` | chỉ đọc cache. Scope thiếu cache → dừng, không tải. Scope quá hạn vẫn được dùng nguyên trạng |
+| `True` | tải scope thiếu cache **và** scope quá hạn (`CATALOG_MAX_AGE_SECONDS` = 15 ngày) |
 
-```python
-scope = {"region": "USA", "delay": 1, "universe": "TOP3000"}
-```
+In ra: trạng thái `LOGIN_ALLOW`, số giây session còn sống, scope cache hết hạn sớm nhất, và 2 field id cho mỗi field type (MATRIX / VECTOR / GROUP) lấy từ scope cuối cùng trong YAML.
 
-`instrumentType` không nằm trong `scope` vì `OPTIONS /simulations` chỉ publish **một** giá trị (`EQUITY`) — nó là hằng số nền tảng, đặt tại `Functions/data.py` (`INSTRUMENT_TYPE`) và được chèn tự động khi dựng query.
+Để đổi tập scope: sửa key `scopes` trong `config/scopes.yaml`. File này là **snapshot** của `OPTIONS /simulations` — một scope mà platform đã bỏ sẽ làm request catalog fail chứ không bị bỏ qua âm thầm.
+
+`instrumentType` không nằm trong scope vì `OPTIONS /simulations` chỉ publish **một** giá trị (`EQUITY`) — nó là hằng số nền tảng, đặt tại `Functions/data.py` (`INSTRUMENT_TYPE`) và được chèn tự động khi dựng query.
 
 Liệt kê toàn bộ scope hợp lệ:
 

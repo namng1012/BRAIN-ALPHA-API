@@ -200,3 +200,32 @@ Nói cách khác: **`EUR` + `USA` chiếm 22/41 = 53.7 % draw nhưng chỉ 4/16 
 **Impact on reported results:** Cache hiện tại đủ tươi (41/41, `ASI_1_MINVOL10M` còn 14.93 d) nên run hiện tại **không gọi API nào** ⇒ token không liên quan, con số `4068s` chỉ là thông tin. Nhưng khi 25 scope chưa cache kia hết hạn đồng loạt thì run đầu tiên là lúc con số này có ý nghĩa, và nếu run đó chết giữa chừng thì phải chạy lại từ đầu (không có resume theo scope). Nếu một reviewer hỏi "run dài bao lâu, token có đủ không", câu trả lời hiện tại là **không được đảm bảo** — cần ghi vào limitation, hoặc thêm checkpoint giữa các scope.
 
 **Sentiment:** 8 — không ảnh hưởng số đã báo cáo, nhưng nó là giới hạn của thiết kế auth hiện tại mà reviewer rất dễ hỏi, và đã được nói ra rõ với user thay vì để ngầm.
+
+## 2026-10-23T07:12:00Z | methodology | score: 6
+
+**Decision:** Bảng operator lọc `scope == "REGULAR"` (84/103), in `level` nguyên trạng, hiển thị `null` thành `-`.
+
+**Alternatives considered:**
+- Lọc `level == "ALL"` (66 operator) — bỏ 18 operator chưa xếp hạng; sai vì mọi operator REGULAR đều dùng được trong expression, `level` là metadata quyền hạn chứ không phải điều kiện dùng được.
+- Lọc thêm theo `field_type` (MATRIX/VECTOR/GROUP) — `/operators` không mang thông tin này; suy ra từ tiền tố `vec_` là heuristic không có trong API contract.
+- Không in `level` — mất thông tin phân quyền mà reviewer cần khi hỏi "alpha này dùng operator có được không".
+
+**Rationale:** `ace_lib.generate_alpha` đặt `"language": "FASTEXPR"` cho **mọi** alpha type, còn `how_to_use.py:186-190` ghi rõ `REGULAR` = operator dùng trong Alpha Expression, `SELECTION` = SuperAlpha Selection, `COMBO` = SuperAlpha Combo. Nên "chỉ REGULAR" = đúng tập operator hợp lệ để viết expression của một REGULAR alpha. `level = null` là một trong hai giá trị hợp lệ của trường, không phải dữ liệu thiếu — hiển thị `-` thay vì `nan` để không bị đọc nhầm là lỗi fetch.
+
+**Impact on reported results:** Không đổi con số nào. Nhưng 84 operator này là **input của bước sinh expression**, và 5 trong 7 category có cả operator `level=null` (`ts_ir`, `vec_max`, `group_sum`, `vector_neut`, `tail`) — quy trình sinh alpha tự động có thể sinh expression mà tài khoản chưa đủ quyền chạy. Nếu sau này gate bằng `level`, phải chấp nhận mất 18 operator.
+
+## 2026-10-23T07:30:00Z | methodology | score: 7
+
+**Decision:** Chia 84 operator REGULAR thành 3 bucket theo **data field type đầu vào** thay vì 7 category của platform: MATRIX 67, VECTOR→MATRIX 7 (`vec_` prefix), GROUP 10 (`group_` prefix hoặc `\bgroup\b` trong definition).
+
+**Alternatives considered:**
+- Giữ 7 category của platform (`Time Series`/`Arithmetic`/...) — phân loại theo **hành vi toán học**, không theo **kiểu dữ liệu đầu vào**; không trả lời được câu "với field type nào thì dùng operator nào", tức là thứ quyết định expression có hợp lệ hay không.
+- Bucket VECTOR dùng `category == "Vector"` của platform — dùng được nhưng khóa vào taxonomy API có thể đổi; tiền tố `vec_` là quy ước ổn định hơn và là điều `how_to_use.py:173` dùng để giải thích ("use `vec_` operator to aggregate vector data and transform it to a matrix").
+- Bucket GROUP chỉ dựa vào arg tên `group` — bỏ sót `group_cartesian_product(g1, g2)`, là group operator không có arg matrix.
+- Bucket GROUP dựa vào `category == "Group"` của platform — trùng kết quả, nhưng nhét 1 heuristic (prefix + regex) vào 1 heuristic (category) là thừa.
+
+**Rationale:** Phân loại được kiểm chứng độc lập: `pd.crosstab(category, bucket)` trên dữ liệu live cho khớp **1-1 tuyệt đối** — `Vector` 7/7 vào VECTOR, `Group` 10/10 vào GROUP, 5 category còn lại 67/67 vào MATRIX, overlap `vec_ ∧ group` = 0. Vậy quy tắc suy ra từ tiền tố + nội dung definition **tái tạo đúng** taxonomy platform mà không cần đọc nó — tức là nó bắt đúng cái phân loại đó, chứ không phải một cách chia khác ngẫu nhiên.
+
+Điểm mấu chốt về mặt nghiên cứu: **một operator không phải hàm một-input**. `ts_sum(x, d)` chỉ nhận MATRIX; `vec_avg(x)` chỉ nhận VECTOR và trả MATRIX; `group_zscore(x, group)` cần **cả hai** field type cùng lúc. Nếu bước sinh expression về sau lấy field ngẫu nhiên từ archive mà không biết bucket của operator, nó sẽ sinh ra expression không compile được — đây là lý do việc bucket này phải tồn tại **trước** bước sinh chứ không phải để cho đẹp bảng in ra.
+
+**Impact on reported results:** Không đổi con số nào. Nhưng nó định nghĩa không gian mẫu cho bước sinh expression: 67 operator chấp nhận MATRIX, 7 chấp nhận VECTOR (và trả về MATRIX để đưa tiếp xuống 67 operator kia), 10 cần MATRIX + GROUP. Lưu ý: 6 operator MATRIX viết bằng **infix** chứ không phải hàm (`less` → `input1 < input2`, `greater`, `equal`, `not_equal`, `less_equal`, `greater_equal`) cộng `ts_step(1)` — parser args tự động sẽ không lấy được input cho chúng.

@@ -1,0 +1,91 @@
+name,category,expression,description
+add,MATRIX_BINARY,"add(x, y, filter = false), x + y",Adds two or more inputs element wise. Set filter=true to treat NaNs as 0 before summing.
+divide,MATRIX_BINARY,"divide(x, y), x / y","Returns x divided by y (x / y). Note: dividing by zero raises an error; to avoid it, use divide(x, add(y, 0.0001)); adding a small epsilon to the denominator prevents divide-by-zero errors."
+power,MATRIX_BINARY,"power(x, y)","Returns x raised to the power of y (x ^ y). Note: power(x, y) can drop the sign of x when y is non-integer; use signed_power(x, y) to preserve the sign of x."
+signed_power,MATRIX_BINARY,"signed_power(x, y)",x raised to the power of y such that final result preserves sign of x
+subtract,MATRIX_BINARY,"subtract(x, y, filter=false), x - y",Subtracts inputs left to right: x ? y ? … Supports two or more inputs. Set filter=true to treat NaNs as 0 before subtraction.
+ts_corr,MATRIX_BINARY,"ts_corr(x, y, d)","Calculates the Pearson correlation between two variables, x and y, over the past d days, showing how closely they move together."
+ts_covariance,MATRIX_BINARY,"ts_covariance(y, x, d)","Calculates the covariance between two time-series variables, y and x, over the past d days. Useful for measuring how two variables move together within a specified historical window."
+ts_regression,MATRIX_BINARY,"ts_regression(y, x, d, lag = 0, rettype = 0)",Returns various parameters related to regression function
+vector_neut,MATRIX_BINARY,"vector_neut(x, y)","For given vectors x and y, it finds a new vector x* (output) such that x* is orthogonal to y"
+abs,MATRIX_UNARY,abs(x),"Returns the absolute value of a number, removing any negative sign."
+days_from_last_change,MATRIX_UNARY,days_from_last_change(x),Calculates the number of days since the last change in the value of a given variable.
+hump,MATRIX_UNARY,"hump(x, hump = 0.01)",Limits amount and magnitude of changes in input (thus reducing turnover)
+inverse,MATRIX_UNARY,inverse(x),"Returns the reciprocal of x (1 / x). Note: errors when x = 0; to avoid it, use inverse(add(x, 0.0001)); adding a small epsilon prevents divide-by-zero errors."
+kth_element,MATRIX_UNARY,"kth_element(x, d, k, ignore=“NaN”)","Returns the K-th value from a time series by looking back over a specified number of (‘d’) days, with the option to ignore certain values. Commonly used for backfilling missing data."
+last_diff_value,MATRIX_UNARY,"last_diff_value(x, d)",Returns the most recent value of x from the past d days that is different from the current value of x.
+log,MATRIX_UNARY,log(x),Calculates the natural logarithm of the input value. Commonly used to transform data that has positive values.
+normalize,MATRIX_UNARY,"normalize(x, useStd = false, limit = 0.0)","Centers a daily cross section by subtracting the market mean; optionally divide by the cross sectional standard deviation and clamp the result to [?limit, +limit]. NaNs are ignored in mean/std."
+pasteurize,MATRIX_UNARY,pasteurize(x),"Set to NaN if x is INF or if the underlying instrument is not in the Alpha universe. This operator may help reduce outliers.
+
+Input: Value of 7 instruments at day t: (2, 3, 5, INF, 3, 8, 10), where value 10 does not belong in Alpha universe
+Output: (2, 3, 5, NaN, 3, 8, NaN)"
+quantile,MATRIX_UNARY,"quantile(x, driver = gaussian, sigma = 1.0)","Ranks and shifts a vector of Alpha values, then applies a chosen statistical distribution (gaussian, cauchy, or uniform) to reduce outliers. The sigma parameter controls the scale of the output."
+rank,MATRIX_UNARY,"rank(x, rate=2)","Ranks the values of the input x among all instruments, returning numbers evenly spaced between 0.0 and 1.0. Useful for normalizing data and reducing the impact of outliers."
+reverse,MATRIX_UNARY,reverse(x), - x
+scale,MATRIX_UNARY,"scale(x, scale=1, longscale=1, shortscale=1)",Scales the input so that the sum of absolute values across all instruments equals a specified book size. Allows separate scaling for long and short positions using optional parameters.
+sign,MATRIX_UNARY,sign(x),"Returns the sign of a number: +1 for positive, -1 for negative, and 0 for zero. If the input is NaN, returns NaN.
+
+Input: Value of 7 instruments at day t: (2, -3, 5, 6, 3, NaN, -10)
+Output: (1, -1, 1, 1, 1, NaN, -1)"
+sqrt,MATRIX_UNARY,sqrt(x),"Returns the non-negative square root of x. Equivalent to power(x, 0.5). Note: for x < 0 the result is undefined; to retain the sign of x, use signed_power(x, 0.5) instead."
+tail,MATRIX_UNARY,"tail(x, lower = 0, upper = 0, newval = 0)","If (x > lower AND x < upper) return newval, else return x. Lower, upper, newval should be constants"
+ts_arg_max,MATRIX_UNARY,"ts_arg_max(x, d)","Returns the number of days since the maximum value occurred in the last d days of a time series. If today's value is the maximum, returns 0; if it was yesterday, returns 1, and so on."
+ts_arg_min,MATRIX_UNARY,"ts_arg_min(x, d)","Returns the number of days since the minimum value occurred in a time series over the past d days. If today's value is the minimum, returns 0; if it was yesterday, returns 1, and so on."
+ts_av_diff,MATRIX_UNARY,"ts_av_diff(x, d)","Calculates the difference between a value and its mean over a specified period, ignoring NaN values in the mean calculation. In short, it returns x – ts_mean(x, d) with NaNs ignored."
+ts_backfill,MATRIX_UNARY,"ts_backfill(x,lookback = d, k=1)","Replaces missing (NaN) values in a time series with the most recent valid value from a specified lookback window, improving data coverage and reducing risk from missing data."
+ts_count_nans,MATRIX_UNARY,"ts_count_nans(x ,d)",Counts the number of missing (NaN) values in a data series over a specified number of days.
+ts_decay_linear,MATRIX_UNARY,"ts_decay_linear(x, d, dense = false)","Applies a linear decay to time-series data over a set number of days, smoothing the data by averaging recent values and reducing the impact of older or missing data."
+ts_delay,MATRIX_UNARY,"ts_delay(x, d)",Returns the value of a variable x from d days ago. Use this operator to access historical data points by specifying the desired time lag in days.
+ts_delta,MATRIX_UNARY,"ts_delta(x, d)",Calculates the difference between a value and its delayed version over a specified period. Useful for measuring changes or momentum in time-series data.
+ts_ir,MATRIX_UNARY,"ts_ir(x, d)","Return information ratio ts_mean(x, d) / ts_std_dev(x, d)"
+ts_kurtosis,MATRIX_UNARY,"ts_kurtosis(x, d)",Returns kurtosis of x for the last d days
+ts_max_diff,MATRIX_UNARY,"ts_max_diff(x, d)","Returns x - ts_max(x, d)"
+ts_mean,MATRIX_UNARY,"ts_mean(x, d)",Calculates the simple average (mean) value of a variable x over the past d days.
+ts_product,MATRIX_UNARY,"ts_product(x, d)",Returns the product of the values of x over the past d days. Useful for calculating geometric means and compounding returns or growth rates.
+ts_quantile,MATRIX_UNARY,"ts_quantile(x,d, driver=""gaussian"" )",Calculates the ts_rank of the input and transforms it using the inverse cumulative distribution function (quantile function) of a specified probability distribution (default: Gaussian/normal). This helps to normalize or reshape the distribution of your data over a rolling window.
+ts_rank,MATRIX_UNARY,"ts_rank(x, d, constant = 0)","Ranks the value of a variable for each instrument over a specified number of past days, returning the rank of the current value (optionally adjusted by a constant). Useful for normalizing time-series data and highlighting relative performance over time."
+ts_returns,MATRIX_UNARY,"ts_returns (x, d, mode = 1)",Returns the relative change in the x value
+ts_scale,MATRIX_UNARY,"ts_scale(x, d, constant = 0)","Scales a time series to a 0–1 range based on its minimum and maximum values over a specified period, with an optional constant shift."
+ts_std_dev,MATRIX_UNARY,"ts_std_dev(x, d)","Calculates the standard deviation of a data series x over the past d days, measuring how much the values deviate from their mean during that period."
+ts_sum,MATRIX_UNARY,"ts_sum(x, d)",Sum values of x for the past d days.
+ts_target_tvr_decay,MATRIX_UNARY,"ts_target_tvr_decay(x, lambda_min=0, lambda_max=1, target_tvr=0.1)","Tune ""ts_decay"" to have a turnover equal to a certain target, with optimization weight range between lambda_min, lambda_max"
+ts_target_tvr_hump,MATRIX_UNARY,"ts_target_tvr_hump(x, lambda_min=0, lambda_max=1, target_tvr=0.1)","Tune ""hump"" to have a turnover equal to a certain target with optimization weight range between lambda_min, lambda_max."
+ts_zscore,MATRIX_UNARY,"ts_zscore(x, d)","Calculates the Z-score of a time series, showing how far today's value is from the recent average, measured in standard deviations. Useful for standardizing and comparing values over time."
+winsorize,MATRIX_UNARY,"winsorize(x, std=4)","Winsorize limits values in a data to within a specified number of standard deviations from the mean, reducing the impact of extreme outliers. Note: recommended std values range from 2 to 5: std = 2, 3, 4, 5 removes approximately 4.5%, 0.27%, 0.01%, and 0.0001% of extreme values, respectively (higher std removes fewer extremes)."
+zscore,MATRIX_UNARY,zscore(x),Z-score is a numerical measurement that describes a value's relationship to the mean of a group of values. Z-score is measured in terms of standard deviations from the mean
+ts_step,MATRIX_CONSTANT,ts_step(1),"Returns a counter of days, incrementing by one each day."
+max,VARIADIC,"max(x, y, ..)",Maximum value of all inputs. At least 2 inputs are required
+min,VARIADIC,"min(x, y ..)",Minimum value of all inputs. At least 2 inputs are required
+multiply,VARIADIC,"multiply(x ,y, ... , filter=false), x * y",Multiplies two or more inputs element wise. Set filter=true to treat NaNs as 1 before multiplication
+if_else,SELECT,"if_else(input1, input2, input 3)","The if_else operator returns one of two values based on a condition. If the condition is true, it returns the first value; if false, it returns the second value."
+trade_when,SELECT,"trade_when(x, y, z)","The trade_when operator changes Alpha values only when a specific condition is met, keeps previous values otherwise, and can close positions by assigning NaN under an exit condition. It is useful for reducing turnover and controlling when trades are executed."
+and,BOOLEAN,"and(input1, input2)","Returns 1 ('true') if both inputs are 1 ('true'). Otherwise, returns 0 ('false')."
+equal,BOOLEAN,input1 == input2,"Returns 1 ('true') if input1 and input2 are the same. Otherwise, returns 0 ('false')."
+greater,BOOLEAN,input1 > input2,"Returns 1 ('true') if input1 is a larger than input2. Otherwise, returns 0 ('false')."
+greater_equal,BOOLEAN,input1 >= input2,"Returns 1 ('true') if input1 is a larger or the same as input2. Otherwise, returns 0 ('false')."
+is_nan,BOOLEAN,is_nan(input),If (input == NaN) return 1 else return 0
+less,BOOLEAN,input1 < input2,"Returns 1 ('true') if input1 is a smaller than input2. Otherwise, returns 0 ('false')."
+less_equal,BOOLEAN,input1 <= input2,"Returns 1 ('true') if input1 is a smaller or the same as input2. Otherwise, returns 0 ('false')."
+not,BOOLEAN,not(x),Returns the logical negation of x. Returns 0 when x is 1 (‘true’) and 1 when x is 0 (‘false’).
+not_equal,BOOLEAN,input1!= input2,"Returns 1 ('true') if input1 and input2 are different numbers. Otherwise, returns 0 ('false')."
+or,BOOLEAN,"or(input1, input2)","Returns 1 if either input is true (either input1 or input2 has a value of 1), otherwise it returns 0."
+vec_avg,VECTOR,vec_avg(x),"Calculates the mean (average) of all elements in a vector field for each instrument and date, converting vector data to a single matrix value."
+vec_count,VECTOR,vec_count(x),Number of elements in vector field x
+vec_max,VECTOR,vec_max(x),Maximum value form vector field x
+vec_min,VECTOR,vec_min(x),Minimum value form vector field x
+vec_range,VECTOR,vec_range(x),Difference between maximum and minimum element in vector field x
+vec_stddev,VECTOR,vec_stddev(x),Standard Deviation of vector field x
+vec_sum,VECTOR,vec_sum(x),Calculates the sum of all values in a vector field.
+group_backfill,GROUP,"group_backfill(x, group, d, std = 4.0)","Fills missing (NaN) values for instruments within the same group by calculating a winsorized mean of all non-NaN values over the past d days. The winsorized mean is computed by trimming extreme values based on a specified standard deviation multiplier (std, default 4.0)."
+group_count,GROUP,"group_count(x, group)","Gives the number of instruments in the same group (e.g. sector) which have valid values of x. For example, x=1 gives the number of instruments in each group (without regard for whether any particular field has valid data). This operator improves weight coverage and may help to reduce drawdown risk."
+group_mean,GROUP,"group_mean(x, weight, group)",Calculates the harmonic mean of a data field within each specified group.
+group_neutralize,GROUP,"group_neutralize(x, group)","Neutralizes Alpha values within each specified group by subtracting the group mean from each value. Groups can be industry, sector, country, or any custom grouping."
+group_rank,GROUP,"group_rank(x, group)","Ranks each element within its group based on the input field, assigning a value between 0.0 and 1.0. This helps compare items within the same group, such as stocks in the same industry."
+group_scale,GROUP,"group_scale(x, group)","Normalizes values within each group to a range between 0 and 1, making data comparable across different groups."
+group_std_dev,GROUP,"group_std_dev(x, group)",All elements in group equals to the standard deviation of the group.
+group_sum,GROUP,"group_sum(x, group)",Sum of x for all instruments in the same group.
+group_zscore,GROUP,"group_zscore(x, group)","Calculates the Z-score of each value within its group, showing how far each value is from the group mean in terms of standard deviations. Useful for comparing values relative to their group."
+bucket,GROUPING,"bucket(rank(x), range=“0, 1, 0.1”, skipBoth=False, NaNGroup=False) or bucket(rank(x), buckets = “2,5,6,7,10”, skipBoth=False, NaNGroup=False)","The bucket operator creates custom groups by dividing data into buckets (ranges) based on ranked values of any data field. These buckets can then be used with group operators like group_neutralize, group_rank, group_zscore etc."
+densify,GROUPING,densify(x),Converts a grouping field of many buckets into lesser number of only available buckets so as to make working with grouping fields computationally efficient
+group_cartesian_product,GROUPING,"group_cartesian_product(g1, g2)","Merge two groups into one group. If originally there are len_1 and len_2 group indices in g1 and g2, there will be len_1 * len_2 indices in the new group."
