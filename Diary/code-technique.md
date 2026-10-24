@@ -350,3 +350,29 @@ Một quyết định khác đáng ghi: chỉ in scope **hết hạn sớm nhấ
 **Đo (2026-10-23, live):** 103 operator publish; `scope` = COMBO 101 / REGULAR 84 / SELECTION 27 → **84 REGULAR** trong 7 category: Time Series 30, Arithmetic 16, Logical 11, Group 10, Cross Sectional 7, Vector 7, Transformational 3. `level` chỉ có 2 giá trị thật: `"ALL"` (66/84) và `null` (18/84) — **không phải thiếu key** (đã kiểm tra: cả 103 record đều có key `level`), mà là platform chưa xếp hạng operator đó. `generate_stats`, `reduce_*`, `combo_a`, `self_corr` là COMBO-only; `in`, `universe_size` là SELECTION-only — không cái nào dùng được cho REGULAR alpha.
 
 **Reusable in:** Bất kỳ endpoint BRAIN nào cần trả lời "có thực sự cần session không" trước khi đưa vào đường cache-only — câu trả lời phụ thuộc endpoint có scope-scoped hay không, không phụ thuộc nó nằm chung "nhóm catalog".
+
+## 2026-10-23T17:31:00Z | code-technique | score: 7
+
+**Where:** `Functions/operators.py` — class `OperatorTable` (`load` / `fetch` / `arg_names` / `bucket_of`); `main.py` — khối `/operators` sau login
+
+**Pattern:** Tách quy tắc thuần tuý (`arg_names`, `bucket_of`) và đường I/O (`fetch`, `load`) vào **một** class, với `staticmethod` cho phần không phụ thuộc session. Đường đọc và đường ghi **trả cùng kiểu** (`DataFrame`), nên `main.py` chỉ cần một biến `operators` bất kể CSV có sẵn trên đĩa hay không.
+
+**Why:** `save()` trả `Path` còn lời gọi muốn dữ liệu để dùng tiếp → buộc phải đọc lại CSV (`pd.read_csv`) lần nữa. Đổi cả hai vế thành `DataFrame` làm một lần đọc là đủ. Đồng thời `load()` là `staticmethod` vì đọc từ đĩa **không cần session** — đây là điểm quan trọng với `LOGIN_ALLOW = False`: bảng operator vẫn dùng được khi pipeline bị cấm gọi platform.
+
+**Thứ tự trong `main.py`:** login → `/operators` → catalog. Nhánh 3 của `/operators` (không có CSV **và** `LOGIN_ALLOW = False`) phải **dừng** — không có gì để load, cũng không được phép fetch. Nhưng `return` ở nhánh lỗi phải nằm **sau** khối `/operators`, không phải trong nhánh `else` của login: nếu check `builder.needs_download()` nằm trong nhánh login thì `LOGIN_ALLOW = False` với catalog thiếu sẽ `return` **trước** khi tới xử lý `/operators`, và bảng operator trên đĩa sẽ không bao giờ được load.
+
+**Reusable in:** mọi bước xử lý có hai đường (cache-hit / fetch) — cache-hit phải **trả cùng kiểu** với fetch, nếu không thì người gọi phải biết nó đang ở đường nào.
+
+**Sentiment:** 7 — reviewer sẽ hỏi "tại sao `load` là staticmethod?", và câu trả lời (đọc đĩa không cần session → `LOGIN_ALLOW=False` vẫn dùng được) là điều đáng giữ; bug thứ tự early-return là loại reviewer tìm ra khi đọc luồng điều khiển.
+
+## 2026-10-23T17:31:00Z.1 | code-technique | score: 6
+
+**Where:** `Functions/operators.py` — `bucket_of()`; `Docs/all-operators.md`
+
+**Pattern:** Verify refactor bằng **byte-identical**, không bằng "trông giống": `cmp` file CSV trước và sau, cộng md5. Với bảng phân loại, byte-identical là bằng chứng mạnh hơn nhiều so với so sánh shape/dtype.
+
+**Why:** Khi đổi tên bucket (`MATRIX_CONSTANT` → `MATRIX_GENERATED`) hoặc refactor hàm → class, rủi ro lớn nhất là **âm thầm** đổi phân loại. `cmp` trên file CSV regenerate loại bỏ khả năng đó: cùng md5 `85b986a9...` nghĩa là 84 dòng, thứ tự, bucket, `expression`, `description` — tất cả y nguyên. Ba nhánh còn lại (CSV có / CSV không + login / CSV không + không login) chạy thật để xác nhận luồng điều khiển, không chỉ đọc code.
+
+**Reusable in:** mọi thay đổi có thể tác động tới bảng sinh ra — cache CSV, parquet, snapshot archive. Chụp baseline trước khi sửa, `cmp` sau.
+
+**Sentiment:** 6 — kỹ thuật quen thuộc nhưng dễ bỏ qua; ở đây nó là thứ duy nhất chứng minh việc đổi tên không đổi dữ liệu.

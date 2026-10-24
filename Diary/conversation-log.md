@@ -837,3 +837,25 @@
 **Open questions:** không.
 
 **Sentiment:** 4 — thay đổi thuần trình bày, không có quyết định khoa học nào.
+
+## 2026-10-23T17:31:00Z | chat-summary | score: 7
+
+**Request:** Ba lượt liên tiếp trên `Docs/all-operators.md` + `Functions/operators.py`: (1) "MATRIX_CONSTANT còn sai, tôi nghĩ cũng nên đổi tên"; (2) "hãy biến đổi các def trong `Functions/operators.py` thành 1 class"; (3) "kết hợp khối login và khối `/operators` trong `main.py` — sau khi login thì check CSV đã có chưa, chưa thì get còn không thì load; nếu `LOGIN_ALLOW = False` thì chỉ load, không có thì báo lỗi".
+
+**Outcome:** Đổi `MATRIX_CONSTANT` → `MATRIX_GENERATED` (6 chỗ trong code + doc). Gộp 3 hàm module-level thành class `OperatorTable` với `arg_names`/`bucket_of` là `staticmethod`, `save()` → `fetch()` trả `DataFrame`, thêm `load()` (staticmethod) đọc CSV từ đĩa. Trong `main.py`, khối `/operators` chuyển lên **ngay sau login**, xử lý 3 nhánh (CSV có → load; CSV không + session → fetch; CSV không + không session → báo lỗi và dừng), tái dùng `data` đã tạo thay vì dựng `BrainData` thứ hai.
+
+**Files touched:**
+- `Functions/operators.py` (`BUCKETS`, `bucket_of()`, class `OperatorTable` gồm `load`/`fetch`/`arg_names`/`bucket_of`)
+- `main.py` (import, khối `/operators` dời lên sau login, check `needs_download()` chuyển xuống sau khối `/operators`)
+- `Docs/all-operators.md` (4 chỗ tên bucket, 3 tham chiếu hàm, thêm §7.1 API + §7.2 thứ tự xử lý)
+- `cache/operators.csv` (sinh lại)
+
+**Quyết định:** `MATRIX_GENERATED` vì `MATRIX_CONSTANT` mô tả sai — `ts_step(1)` sinh chuỗi 1, 2, 3, 4… (đổi mỗi ngày), không phải hằng số.
+
+**Quyết định (thứ tự luồng):** check `builder.needs_download()` phải nằm **sau** khối `/operators`, không phải trong nhánh `else` của login. Lý do: với `LOGIN_ALLOW = False` và catalog thiếu, `return` ở nhánh login sẽ bỏ qua hẳn việc load bảng operator đã có trên đĩa — trái với yêu cầu "nếu `LOGIN_ALLOW = False` thì chỉ load nếu có".
+
+**Kiểm chứng:** CSV regenerate **byte-identical** qua cả 3 lượt (md5 `85b986a9...`, 14758 bytes) — `cmp` với baseline chụp trước lượt đầu. Cả 3 nhánh điều khiển chạy thật: CSV có → `Loaded 84 operators`; CSV không + `LOGIN_ALLOW=True` → `Wrote 84 operators`; CSV không + `LOGIN_ALLOW=False` → `Error: no operator table ... and LOGIN_ALLOW is False`. Doc verify: 9/9 header count khớp CSV, 84/84 dòng §5 khớp. Lint không đổi so với HEAD (2 lỗi `F401` pre-existing, `TRY004` là code cũ).
+
+**Open questions:** `git status` cho thấy `operators.csv` ở thư mục gốc đang staged-delete (`D`) từ trước session này — bản đang dùng nằm ở `cache/operators.csv`. Chưa rõ có muốn commit lại file ở gốc hay không.
+
+**Sentiment:** 7 — đổi tên có lý do ngữ nghĩa rõ ràng, refactor class giữ được byte-identical, và bug thứ tự early-return đã được phát hiện và nêu ra thay vì sửa im lặng.

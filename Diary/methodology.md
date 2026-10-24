@@ -229,3 +229,18 @@ Nói cách khác: **`EUR` + `USA` chiếm 22/41 = 53.7 % draw nhưng chỉ 4/16 
 Điểm mấu chốt về mặt nghiên cứu: **một operator không phải hàm một-input**. `ts_sum(x, d)` chỉ nhận MATRIX; `vec_avg(x)` chỉ nhận VECTOR và trả MATRIX; `group_zscore(x, group)` cần **cả hai** field type cùng lúc. Nếu bước sinh expression về sau lấy field ngẫu nhiên từ archive mà không biết bucket của operator, nó sẽ sinh ra expression không compile được — đây là lý do việc bucket này phải tồn tại **trước** bước sinh chứ không phải để cho đẹp bảng in ra.
 
 **Impact on reported results:** Không đổi con số nào. Nhưng nó định nghĩa không gian mẫu cho bước sinh expression: 67 operator chấp nhận MATRIX, 7 chấp nhận VECTOR (và trả về MATRIX để đưa tiếp xuống 67 operator kia), 10 cần MATRIX + GROUP. Lưu ý: 6 operator MATRIX viết bằng **infix** chứ không phải hàm (`less` → `input1 < input2`, `greater`, `equal`, `not_equal`, `less_equal`, `greater_equal`) cộng `ts_step(1)` — parser args tự động sẽ không lấy được input cho chúng.
+
+## 2026-10-23T17:31:00Z | methodology | score: 7
+
+**Decision:** Đặt tên bucket của `ts_step` là `MATRIX_GENERATED`, không phải `MATRIX_CONSTANT`.
+
+**Alternatives considered:**
+- Giữ `MATRIX_CONSTANT` — sai về mặt ngữ nghĩa: tên gợi ý giá trị không đổi theo thời gian, trong khi `ts_step(1)` sinh ra chuỗi **1, 2, 3, 4, …** — thay đổi mỗi ngày. Tên cũ mô tả sai đối tượng mà nó gán nhãn.
+- `MATRIX_NULLARY` — đúng về số argument (0 data field) nhưng nói về **arity** chứ không nói về **vai trò**: nhiều operator khác cũng có 0 data field (`ts_step` là ví dụ duy nhất trong 84, nhưng tên gọi chung sẽ không gợi ra rằng đây là nhóm sinh giá trị).
+- Gộp `ts_step` vào `MATRIX_UNARY` — sai về typing: `ts_step` không biến đổi một field nào, nó **sinh** chuỗi. Gộp sẽ làm sai mô tả của cả 40 operator unary.
+
+**Rationale:** `MATRIX_GENERATED` mô tả đúng cả hai vế: không tiêu thụ field nào (khác với `MATRIX_UNARY`) **và** vẫn trả về một MATRIX (khác với `GROUPING` vốn không có matrix nào đi ra). Bucket này có đúng 1 thành viên, nên tên của nó chính là định nghĩa của nhóm — một tên sai sẽ lan ra mọi nơi nó được nhắc tới.
+
+**Impact on reported results:** Không đổi con số nào, không đổi phân loại của operator nào (CSV regenerate ra **byte-identical**, md5 `85b986a9...`). Nhưng tên bucket xuất hiện trong tài liệu (`Docs/all-operators.md`), trong cột `category` của CSV và trong entry diary cũ — nếu để sai, người đọc tài liệu sẽ hiểu `ts_step` trả về hằng số, tức là không dùng được làm trục thời gian cho `ts_regression`.
+
+**Sentiment:** 7 — tên bucket là thứ reviewer đọc đầu tiên khi tra cứu operator; một tên sai về ngữ nghĩa là lỗi tài liệu, không chỉ là lỗi thẩm mỹ.

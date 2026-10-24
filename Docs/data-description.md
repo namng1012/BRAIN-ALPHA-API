@@ -180,7 +180,9 @@ uv run main.py
 | `False` | chỉ đọc cache. Scope thiếu cache → dừng, không tải. Scope quá hạn vẫn được dùng nguyên trạng |
 | `True` | tải scope thiếu cache **và** scope quá hạn (`CATALOG_MAX_AGE_SECONDS` = 15 ngày) |
 
-In ra: trạng thái `LOGIN_ALLOW`, số giây session còn sống, scope cache hết hạn sớm nhất, và 2 field id cho mỗi field type (MATRIX / VECTOR / GROUP) lấy từ scope cuối cùng trong YAML.
+Sau khối login, `main.py` xử lý bảng operator **trước** catalog (xem `Docs/all-operators.md` §7.2): CSV có trên đĩa thì load, không có thì fetch nếu `LOGIN_ALLOW = True`, còn không thì báo lỗi và dừng.
+
+In ra: trạng thái `LOGIN_ALLOW`, số giây session còn sống, số operator đã load hoặc ghi, scope cache hết hạn sớm nhất, và 2 field id cho mỗi field type (MATRIX / VECTOR / GROUP) lấy từ scope cuối cùng trong YAML.
 
 Để đổi tập scope: sửa key `scopes` trong `config/scopes.yaml`. File này là **snapshot** của `OPTIONS /simulations` — một scope mà platform đã bỏ sẽ làm request catalog fail chứ không bị bỏ qua âm thầm.
 
