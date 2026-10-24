@@ -6,51 +6,48 @@ fetched once and cached as a CSV in the cache folder; a later run finds the file
 and spends neither a request nor a login.
 """
 
-import itertools
 import os
 import re
 from pathlib import Path
 from typing import Literal, TypedDict
 
-import numpy as np
 import pandas as pd
 
 from Functions.cache import CACHE_DIR
 from Functions.data import BrainData
+from Functions.random import FloatSampler, IntegerSampler
 
 # The operator table sits next to the scope snapshots in the cache folder.
-OPERATORS_CSV_PATH = CACHE_DIR / "operators.csv"
+OPERATORS_CSV_PATH=CACHE_DIR / "operators.csv"
 
 
-# The profile of one built operator call. The functional form is used because
-# the `inputs matrics` key carries a space, which the class syntax cannot
-# express.
-OperatorProfile = TypedDict(
+# The profile of one built operator call: category, name, and the config
+# (arguments that are not matrix fields, drawn at random).
+OperatorProfile=TypedDict(
     "OperatorProfile",
     {
         "category": str,
         "name": str,
         "config": dict[str, int | bool],
-        "inputs matrics": list[str],
-        "expression": str,
     },
 )
-OperatorProfile.__doc__ = """One built operator call: what it is, how it is configured, what it reads.
+OperatorProfile.__doc__="""One built operator call: what it is and how it is configured.
 
 `category` is the bucket the operator belongs to, `name` the operator's own
-name, `config` the arguments that are not matrix fields with the values the
-platform receives, `inputs matrics` the matrix fields in the order they reach
-the platform, and `expression` the FASTEXPR itself.
+name, and `config` the arguments that are not matrix fields with the values
+the platform receives (the window `d`, the `lag`, the `rettype`). Arguments
+fixed by the operator itself are not listed: they do not change with the seed,
+so they are not needed to replay the call.
 """
 
 # The data-field arguments of an operator call. The numeric and keyword
 # arguments (d, k, lag, rettype, filter, std) are not matrix fields, so
 # ts_corr(x, y, d) counts as two inputs and ts_mean(x, d) as one.
-DATA_ARGS = {"x", "y", "z", "input", "input1", "input2", "input3"}
+DATA_ARGS={"x", "y", "z", "input", "input1", "input2", "input3"}
 
 # The buckets, in the order a FASTEXPR walks through the data flow. The order
 # is the order the rows appear in the CSV.
-BUCKETS = (
+BUCKETS=(
     "MATRIX_BINARY",
     "MATRIX_UNARY",
     "MATRIX_GENERATED",
@@ -71,19 +68,19 @@ class OperatorTable:
     every operator falls into exactly one bucket.
     """
 
-    def __init__(self, data: BrainData, path: Path = OPERATORS_CSV_PATH):
-        self.data = data
-        self.path = path
+    def __init__(self, data: BrainData, path: Path=OPERATORS_CSV_PATH):
+        self.data=data
+        self.path=path
 
     @staticmethod
-    def load(path: Path = OPERATORS_CSV_PATH) -> pd.DataFrame:
+    def load(path: Path=OPERATORS_CSV_PATH) -> pd.DataFrame:
         """Read the cached table from disk.
 
         `category` comes back as an ordered categorical so it sorts in the same
         bucket order a freshly fetched table has.
         """
-        table = pd.read_csv(path, encoding="utf-8")
-        table["category"] = pd.Categorical(
+        table=pd.read_csv(path, encoding="utf-8")
+        table["category"]=pd.Categorical(
             table["category"], categories=BUCKETS, ordered=True
         )
         return table
@@ -95,11 +92,11 @@ class OperatorTable:
         Keyword defaults are stripped. Nested calls like bucket(rank(x), ...) are
         not arguments of their own, so the result is only a lower bound on arity.
         """
-        start = definition.find("(")
+        start=definition.find("(")
         if start < 0:
             return []
 
-        depth, parts, current = 0, [], ""
+        depth, parts, current=0, [], ""
         for char in definition[start + 1 :]:
             if char in "([{":
                 depth += 1
@@ -109,7 +106,7 @@ class OperatorTable:
                 depth -= 1
             if char == "," and depth == 0:
                 parts.append(current)
-                current = ""
+                current=""
             else:
                 current += char
         parts.append(current)
@@ -135,13 +132,13 @@ class OperatorTable:
         condition rather than a value, and BOOLEAN returns a 0/1 mask rather than
         a value. Every operator falls in exactly one.
         """
-        is_select = len(args) >= 3 and all(n in DATA_ARGS for n in args)
+        is_select=len(args) >= 3 and all(n in DATA_ARGS for n in args)
         # bucket and densify are named explicitly: their typing is stated only in
         # their prose description, and matching on that wording would silently
         # reclassify them the day WorldQuant rewords it. group_cartesian_product
         # falls out structurally instead — it is the one group_ operator that never
         # names a group argument.
-        is_grouping = name in ("bucket", "densify") or (
+        is_grouping=name in ("bucket", "densify") or (
             name.startswith("group_") and not re.search(r"\bgroup\b", definition)
         )
 
@@ -171,33 +168,33 @@ class OperatorTable:
         # ranked or z-scored on its own.
         if name == "ts_step":
             return "MATRIX_GENERATED"
-        n_matrix = sum(1 for n in args if n in DATA_ARGS)
+        n_matrix=sum(1 for n in args if n in DATA_ARGS)
         return "MATRIX_BINARY" if n_matrix == 2 else "MATRIX_UNARY"
 
     def fetch(self) -> pd.DataFrame:
         """Fetch /operators, classify it, write the CSV, and return the table."""
-        payload = self.data._get(self.data.base_url + "/operators")
+        payload=self.data._get(self.data.base_url + "/operators")
         if isinstance(payload, dict):
             raise RuntimeError(f"/operators returned an error: {payload}")
 
-        operators = pd.DataFrame(payload).explode("scope")
-        regular = (
+        operators=pd.DataFrame(payload).explode("scope")
+        regular=(
             operators[operators["scope"] == "REGULAR"].reset_index(drop=True).copy()
         )
 
         # bucket ships a multi-line definition, which would break a one-line
         # reading of the table.
-        regular["definition"] = (
+        regular["definition"]=(
             regular["definition"].str.replace(r"\s+", " ", regex=True).str.strip()
         )
         # The platform ships some descriptions with CRLF line endings and the CSV
         # writer keeps them verbatim, so they are normalised to keep the file's
         # line endings uniform.
-        regular["description"] = regular["description"].str.replace(
+        regular["description"]=regular["description"].str.replace(
             "\r\n", "\n", regex=False
         )
 
-        table = pd.DataFrame(
+        table=pd.DataFrame(
             {
                 "name": regular["name"],
                 "category": [
@@ -215,106 +212,12 @@ class OperatorTable:
         # Rows are grouped by category in the order the buckets are declared, not
         # alphabetically: the declaration order follows the data flow a FASTEXPR
         # walks through, so reading the CSV top to bottom walks the same path.
-        table["category"] = pd.Categorical(
+        table["category"]=pd.Categorical(
             table["category"], categories=BUCKETS, ordered=True
         )
-        table = table.sort_values(["category", "name"])
+        table=table.sort_values(["category", "name"])
         table.to_csv(self.path, index=False, encoding="utf-8")
         return table
-
-
-class IntegerSampler:
-    """Draws integers from an inclusive range, uniformly or in balanced buckets.
-
-    The balanced distribution splits the range into five buckets cut at fixed
-    *fractions* of the range rather than at fixed day counts: the range size is
-    not fixed (a rolling window may be 252 days, a lag may be 5), so the cut
-    points scale with it.
-
-    The fractions are the quintiles of a 252-trading-day year, so a 252-day
-    window splits into 1-5, 6-22, 23-66, 67-126 and 127-252. Any other range
-    keeps the same proportions.
-    """
-
-    # The cut points of the five buckets, as fractions of the range size.
-    BUCKET_FRACTIONS = (5 / 252, 22 / 252, 66 / 252, 126 / 252)
-
-    # The number of buckets a balanced draw splits the range into.
-    BUCKET_COUNT = len(BUCKET_FRACTIONS) + 1
-
-    @classmethod
-    def buckets(cls, min_value: int, max_value: int) -> list[tuple[int, int]]:
-        """Partition an inclusive integer range into five nonempty buckets.
-
-        The cuts are the range's quintiles: a 252-value range splits into
-        1-5, 6-22, 23-66, 67-126 and 127-252, and a smaller range keeps the same
-        proportions.
-        """
-        count = max_value - min_value + 1
-        if count < cls.BUCKET_COUNT:
-            # Too few integers to split: each bucket is a single value.
-            return [(value, value) for value in range(min_value, max_value + 1)]
-
-        # Bucket boundaries are end-exclusive offsets from min_value.
-        cuts = [0]
-        for index, fraction in enumerate(cls.BUCKET_FRACTIONS, start=1):
-            scaled_cut = round(count * fraction)
-            # Every bucket must hold at least one integer, so a cut may not fall
-            # below the previous one nor above the room left for the later buckets.
-            lower_bound = cuts[-1] + 1
-            upper_bound = count - (cls.BUCKET_COUNT - index)
-            cuts.append(max(lower_bound, min(scaled_cut, upper_bound)))
-        cuts.append(count)
-
-        return [
-            (min_value + left, min_value + right - 1)
-            for left, right in itertools.pairwise(cuts)
-        ]
-
-    @classmethod
-    def sample(
-        cls,
-        value_range: tuple[int, int],
-        seed: int | None = None,
-        stream: int = 0,
-        *,
-        distribution: Literal["uniform", "balanced"] = "uniform",
-    ) -> int:
-        """Draw one integer from the inclusive range `value_range`.
-
-        `distribution="uniform"` (default): every integer is equally likely.
-
-        `distribution="balanced"`: one of the five buckets is drawn uniformly,
-        then an integer inside that bucket is drawn uniformly. The buckets are the
-        range's quintiles, so a 252-value range splits into 1-5, 6-22, 23-66,
-        67-126 and 127-252, each with probability 20%. Every integer stays
-        possible, but the probability of any single integer is not equal across
-        the range.
-
-        `seed=None` draws fresh entropy from the OS CSPRNG, so the draw is not
-        anchored to any fixed constant.
-
-        `stream` picks the entropy sub-stream: draws that share a seed but sit on
-        different streams are independent, so adding a new draw for another
-        category never shifts the value an existing draw produces. The same seed
-        and stream replay the same integer bit-exact.
-        """
-        min_value, max_value = value_range
-        if min_value > max_value:
-            raise ValueError("value_range must be an inclusive (min, max) pair")
-        if distribution not in ("uniform", "balanced"):
-            raise ValueError("distribution must be 'uniform' or 'balanced'")
-
-        if seed is None:
-            seed = int.from_bytes(os.urandom(8), "big")
-        rng = np.random.default_rng([seed, stream])
-
-        if distribution == "uniform":
-            return int(rng.integers(min_value, max_value + 1))
-
-        buckets = cls.buckets(min_value, max_value)
-        bucket = buckets[int(rng.integers(0, len(buckets)))]
-        return int(rng.integers(bucket[0], bucket[1] + 1))
 
 
 class MatrixBinary:
@@ -331,14 +234,14 @@ class MatrixBinary:
 
     # The rolling window the time-series operators run over, in days. 252 is
     # the longest lookback a year of trading days covers.
-    WINDOW_DAYS = (1, 252)
+    WINDOW_DAYS=(1, 252)
 
     # The lag ts_regression shifts x by before the fit.
-    LAG = (0, 5)
+    LAG=(0, 5)
 
     # The ts_regression output types: 0 residual, 1 beta, 2 alpha, 3 predicted
     # value, 4 correlation, 5 R-squared, 6-9 t-statistics and standard errors.
-    RETTYPE = (0, 9)
+    RETTYPE=(0, 9)
 
     @staticmethod
     def get(
@@ -346,9 +249,9 @@ class MatrixBinary:
         x: str,
         y: str,
         *,
-        distribution: Literal["uniform", "balanced"] = "uniform",
-    ) -> OperatorProfile:
-        """Build the profile of the named MATRIX_BINARY operator.
+        distribution: Literal["uniform", "balanced"]="uniform",
+    ) -> tuple[str, OperatorProfile]:
+        """Build the named MATRIX_BINARY operator.
 
         `name` is the operator name as the platform spells it, `x` and `y` are
         two matrix field ids. The two fields reach the platform in the order
@@ -365,8 +268,11 @@ class MatrixBinary:
         length the same probability, "balanced" gives each of the five horizon
         buckets the same probability instead. Operators that take no window
         ignore it.
+
+        Returns a tuple of (expression, profile) where expression is the
+        FASTEXPR string and profile contains category, name, and config.
         """
-        builders = {
+        builders={
             "add": MatrixBinary.add,
             "divide": MatrixBinary.divide,
             "multiply": MatrixBinary.multiply,
@@ -378,7 +284,7 @@ class MatrixBinary:
             "ts_regression": MatrixBinary.ts_regression,
             "vector_neut": MatrixBinary.vector_neut,
         }
-        builder = builders[name]
+        builder=builders[name]
         # Only the ts_* operators take a window, so only they take a
         # distribution; the rest would reject the keyword.
         if name.startswith("ts_"):
@@ -389,40 +295,38 @@ class MatrixBinary:
     def _profile(
         name: str,
         config: dict[str, int | bool],
-        inputs: list[str],
         expression: str,
-    ) -> OperatorProfile:
-        """Assemble the profile of one built operator call.
+    ) -> tuple[str, OperatorProfile]:
+        """Assemble the expression and profile of one built operator call.
 
         `config` holds the arguments that are not matrix fields and that the
         draw produced — the window `d`, the `lag` and the `rettype`. The
         arguments fixed by the operator itself are not listed: they do not
         change with the seed, so they are not needed to replay the call.
-        `inputs` holds the matrix fields in the order they reach the platform.
+
+        Returns a tuple of (expression, profile).
         """
-        return {
+        profile: OperatorProfile={
             "category": "MATRIX_BINARY",
             "name": name,
             "config": config,
-            "inputs matrics": inputs,
-            "expression": expression,
         }
+        return (expression, profile)
 
     @staticmethod
-    def add(x: str, y: str) -> OperatorProfile:
+    def add(x: str, y: str) -> tuple[str, OperatorProfile]:
         """Build the `add` FASTEXPR over two matrix field ids.
 
-        `filter = true` treats NaN as 0 before summing.
+        `filter=true` treats NaN as 0 before summing.
         """
         return MatrixBinary._profile(
             "add",
             {},
-            [x, y],
-            f"add({x}, {y}, filter = true)",
+            f"add({x}, {y}, filter=true)",
         )
 
     @staticmethod
-    def divide(x: str, y: str) -> OperatorProfile:
+    def divide(x: str, y: str) -> tuple[str, OperatorProfile]:
         """Build the `divide` FASTEXPR over two matrix field ids.
 
         The platform's `divide` takes no `filter` argument, so NaN propagates and a
@@ -431,25 +335,23 @@ class MatrixBinary:
         return MatrixBinary._profile(
             "divide",
             {},
-            [x, y],
             f"divide({x}, {y})",
         )
 
     @staticmethod
-    def multiply(x: str, y: str) -> OperatorProfile:
+    def multiply(x: str, y: str) -> tuple[str, OperatorProfile]:
         """Build the `multiply` FASTEXPR over two matrix field ids.
 
-        `filter = true` treats NaN as 1 before multiplying.
+        `filter=true` treats NaN as 1 before multiplying.
         """
         return MatrixBinary._profile(
             "multiply",
             {},
-            [x, y],
-            f"multiply({x}, {y}, filter = true)",
+            f"multiply({x}, {y}, filter=true)",
         )
 
     @staticmethod
-    def power(x: str, y: str) -> OperatorProfile:
+    def power(x: str, y: str) -> tuple[str, OperatorProfile]:
         """Build the `power` FASTEXPR over two matrix field ids.
 
         The platform's `power` takes no `filter` argument.
@@ -457,12 +359,11 @@ class MatrixBinary:
         return MatrixBinary._profile(
             "power",
             {},
-            [x, y],
             f"power({x}, {y})",
         )
 
     @staticmethod
-    def signed_power(x: str, y: str) -> OperatorProfile:
+    def signed_power(x: str, y: str) -> tuple[str, OperatorProfile]:
         """Build the `signed_power` FASTEXPR over two matrix field ids.
 
         The platform's `signed_power` takes no `filter` argument.
@@ -470,32 +371,30 @@ class MatrixBinary:
         return MatrixBinary._profile(
             "signed_power",
             {},
-            [x, y],
             f"signed_power({x}, {y})",
         )
 
     @staticmethod
-    def subtract(x: str, y: str) -> OperatorProfile:
+    def subtract(x: str, y: str) -> tuple[str, OperatorProfile]:
         """Build the `subtract` FASTEXPR over two matrix field ids.
 
-        `filter = true` treats NaN as 0 before subtracting.
+        `filter=true` treats NaN as 0 before subtracting.
         """
         return MatrixBinary._profile(
             "subtract",
             {},
-            [x, y],
-            f"subtract({x}, {y}, filter = true)",
+            f"subtract({x}, {y}, filter=true)",
         )
 
     @staticmethod
     def ts_corr(
         x: str,
         y: str,
-        d: int | None = None,
-        seed: int | None = None,
+        d: int | None=None,
+        seed: int | None=None,
         *,
-        distribution: Literal["uniform", "balanced"] = "balanced",
-    ) -> OperatorProfile:
+        distribution: Literal["uniform", "balanced"]="balanced",
+    ) -> tuple[str, OperatorProfile]:
         """Build the `ts_corr` FASTEXPR: rolling Pearson correlation of x and y over d days.
 
         `d` is the window in days, an integer argument to the platform. `d=None`
@@ -509,13 +408,12 @@ class MatrixBinary:
         so two operators are always compared over the same window.
         """
         if d is None:
-            d = IntegerSampler.sample(
+            d=IntegerSampler.sample(
                 MatrixBinary.WINDOW_DAYS, seed, 1, distribution=distribution
             )
         return MatrixBinary._profile(
             "ts_corr",
             {"d": d},
-            [x, y],
             f"ts_corr({x}, {y}, {d})",
         )
 
@@ -523,11 +421,11 @@ class MatrixBinary:
     def ts_covariance(
         y: str,
         x: str,
-        d: int | None = None,
-        seed: int | None = None,
+        d: int | None=None,
+        seed: int | None=None,
         *,
-        distribution: Literal["uniform", "balanced"] = "balanced",
-    ) -> OperatorProfile:
+        distribution: Literal["uniform", "balanced"]="balanced",
+    ) -> tuple[str, OperatorProfile]:
         """Build the `ts_covariance` FASTEXPR: rolling covariance of y and x over d days.
 
         The platform's own signature puts `y` first, so the argument order is `y, x`
@@ -542,13 +440,12 @@ class MatrixBinary:
         buckets the same probability instead.
         """
         if d is None:
-            d = IntegerSampler.sample(
+            d=IntegerSampler.sample(
                 MatrixBinary.WINDOW_DAYS, seed, 1, distribution=distribution
             )
         return MatrixBinary._profile(
             "ts_covariance",
             {"d": d},
-            [y, x],
             f"ts_covariance({y}, {x}, {d})",
         )
 
@@ -556,13 +453,13 @@ class MatrixBinary:
     def ts_regression(
         y: str,
         x: str,
-        d: int | None = None,
-        lag: int | None = None,
-        rettype: int | None = None,
-        seed: int | None = None,
+        d: int | None=None,
+        lag: int | None=None,
+        rettype: int | None=None,
+        seed: int | None=None,
         *,
-        distribution: Literal["uniform", "balanced"] = "balanced",
-    ) -> OperatorProfile:
+        distribution: Literal["uniform", "balanced"]="balanced",
+    ) -> tuple[str, OperatorProfile]:
         """Build the `ts_regression` FASTEXPR: rolling OLS of y on x over d days.
 
         `y` is the regressand and `x` the predictor. `lag` shifts x before the fit;
@@ -585,36 +482,857 @@ class MatrixBinary:
         the lag and the rettype are always drawn uniformly.
         """
         if seed is None:
-            seed = int.from_bytes(os.urandom(8), "big")
+            seed=int.from_bytes(os.urandom(8), "big")
         if d is None:
-            d = IntegerSampler.sample(
+            d=IntegerSampler.sample(
                 MatrixBinary.WINDOW_DAYS, seed, 1, distribution=distribution
             )
         if lag is None:
             # Entropy stream 3, separate from the window's stream 1 and rettype's
             # stream 2, so the draw of one does not shift the others.
-            lag = IntegerSampler.sample(MatrixBinary.LAG, seed, 3)
+            lag=IntegerSampler.sample(MatrixBinary.LAG, seed, 3, distribution="uniform")
         if rettype is None:
             # Entropy stream 2, separate from the window's stream 1, so the draw of
             # one does not shift the other.
-            rettype = IntegerSampler.sample(MatrixBinary.RETTYPE, seed, 2)
+            rettype=IntegerSampler.sample(MatrixBinary.RETTYPE, seed, 2, distribution="uniform")
         return MatrixBinary._profile(
             "ts_regression",
             {"d": d, "lag": lag, "rettype": rettype},
-            [y, x],
-            f"ts_regression({y}, {x}, {d}, lag = {lag}, rettype = {rettype})",
+            f"ts_regression({y}, {x}, {d}, lag={lag}, rettype={rettype})",
         )
 
     @staticmethod
-    def vector_neut(x: str, y: str) -> OperatorProfile:
+    def vector_neut(x: str, y: str) -> tuple[str, OperatorProfile]:
         """Build the `vector_neut` FASTEXPR: the component of x orthogonal to y.
 
         Cross-sectional: it strips the linear projection of x onto y, leaving x* with
-        x* . y = 0. "Vector" is the alpha position vector, not a VECTOR-type field.
+        x* . y=0. "Vector" is the alpha position vector, not a VECTOR-type field.
         """
         return MatrixBinary._profile(
             "vector_neut",
             {},
-            [x, y],
             f"vector_neut({x}, {y})",
         )
+
+
+class MatrixUnary:
+    """The MATRIX_UNARY operators: one matrix field in, one matrix out.
+
+    Every operator in this bucket consumes exactly one matrix field and
+    returns a matrix, so one class holds all of them.
+
+    The numeric arguments the platform takes alongside the field are drawn
+    at random when the caller leaves them out, and each draw sits on its
+    own entropy stream so adding an argument later never shifts the value
+    an existing draw produces.
+    """
+
+    # The rolling window the time-series operators run over, in days. 252 is the
+    # longest lookback a year of trading days covers.
+    WINDOW_DAYS=(1, 252)
+
+    # The entropy streams the drawn arguments sit on. Each kind of argument gets
+    # its own stream, so drawing one never shifts the value another produces.
+    WINDOW_STREAM=1
+    KTH_ELEMENT_K_STREAM=2
+    WINSORIZE_STD_STREAM=3
+    DRIVER_STREAM=4
+    DENSE_STREAM=5
+    HUMP_STREAM=6
+    NORMALIZE_USE_STD_STREAM=7
+    NORMALIZE_LIMIT_STREAM=8
+    QUANTILE_SIGMA_STREAM=9
+    RANK_RATE_STREAM=10
+    SCALE_BOOK_STREAM=11
+    SCALE_LONG_STREAM=12
+    SCALE_SHORT_STREAM=13
+    TAIL_LOWER_STREAM=14
+    TAIL_UPPER_STREAM=15
+    TAIL_NEWVAL_STREAM=16
+    TS_BACKFILL_K_STREAM=17
+    TS_RETURNS_MODE_STREAM=18
+    TS_TARGET_TVR_LAMBDA_MIN_STREAM=19
+    TS_TARGET_TVR_LAMBDA_MAX_STREAM=20
+    TS_TARGET_TVR_TARGET_STREAM=21
+    WINSORIZE_WINDOW_STREAM=22
+
+    # The probability distributions `quantile` and `ts_quantile` map the ranks onto.
+    DRIVERS=("gaussian", "cauchy", "uniform")
+
+    # The ranks `kth_element` takes, and the values each rank makes it ignore.
+    KTH_ELEMENT_KS=(1, 2)
+    KTH_ELEMENT_IGNORE={1: "NaN", 2: "NaN 0"}
+
+    # The book sizes `scale` targets, in platform units.
+    SCALE_BOOK_SIZES=(1, 10)
+
+    @staticmethod
+    def get(
+        name: str,
+        x: str,
+        *,
+        distribution: Literal["uniform", "balanced"]="uniform",
+    ) -> tuple[str, OperatorProfile]:
+        """Build the named MATRIX_UNARY operator.
+
+        `name` is the operator name as the platform spells it, `x` is one
+        matrix field id.
+
+        The numeric arguments the platform takes alongside the field are
+        drawn at random, so two calls with the same name differ in their
+        parameters.
+
+        `distribution` picks how windowed parameters are drawn: "uniform"
+        gives every length the same probability, "balanced" gives each of
+        the five horizon buckets the same probability instead.
+
+        Returns a tuple of (expression, profile) where expression is the
+        FASTEXPR string and profile contains category, name, and config.
+        """
+        builders={
+            "abs": MatrixUnary.abs_,
+            "days_from_last_change": MatrixUnary.days_from_last_change,
+            "hump": MatrixUnary.hump,
+            "inverse": MatrixUnary.inverse,
+            "kth_element": MatrixUnary.kth_element,
+            "last_diff_value": MatrixUnary.last_diff_value,
+            "log": MatrixUnary.log,
+            "normalize": MatrixUnary.normalize,
+            "pasteurize": MatrixUnary.pasteurize,
+            "quantile": MatrixUnary.quantile,
+            "rank": MatrixUnary.rank,
+            "reverse": MatrixUnary.reverse,
+            "scale": MatrixUnary.scale,
+            "sign": MatrixUnary.sign,
+            "sqrt": MatrixUnary.sqrt,
+            "tail": MatrixUnary.tail,
+            "ts_arg_max": MatrixUnary.ts_arg_max,
+            "ts_arg_min": MatrixUnary.ts_arg_min,
+            "ts_av_diff": MatrixUnary.ts_av_diff,
+            "ts_backfill": MatrixUnary.ts_backfill,
+            "ts_count_nans": MatrixUnary.ts_count_nans,
+            "ts_decay_linear": MatrixUnary.ts_decay_linear,
+            "ts_delay": MatrixUnary.ts_delay,
+            "ts_delta": MatrixUnary.ts_delta,
+            "ts_ir": MatrixUnary.ts_ir,
+            "ts_kurtosis": MatrixUnary.ts_kurtosis,
+            "ts_max_diff": MatrixUnary.ts_max_diff,
+            "ts_mean": MatrixUnary.ts_mean,
+            "ts_product": MatrixUnary.ts_product,
+            "ts_quantile": MatrixUnary.ts_quantile,
+            "ts_rank": MatrixUnary.ts_rank,
+            "ts_returns": MatrixUnary.ts_returns,
+            "ts_scale": MatrixUnary.ts_scale,
+            "ts_std_dev": MatrixUnary.ts_std_dev,
+            "ts_sum": MatrixUnary.ts_sum,
+            "ts_target_tvr_decay": MatrixUnary.ts_target_tvr_decay,
+            "ts_target_tvr_hump": MatrixUnary.ts_target_tvr_hump,
+            "ts_zscore": MatrixUnary.ts_zscore,
+            "winsorize": MatrixUnary.winsorize,
+            "zscore": MatrixUnary.zscore,
+        }
+        builder=builders[name]
+        # Operators that take a window parameter accept distribution; others ignore it.
+        if name.startswith("ts_") or name in ("kth_element", "last_diff_value", "tail", "winsorize"):
+            return builder(x, distribution=distribution)
+        return builder(x)
+
+    @staticmethod
+    def _profile(
+        name: str,
+        config: dict[str, int | bool | float | str],
+        expression: str,
+    ) -> tuple[str, OperatorProfile]:
+        """Assemble the expression and profile of one built operator call.
+
+        `config` holds the arguments that are not matrix fields and that the
+        draw produced — the window `d`, boolean flags, and numeric parameters.
+        The arguments fixed by the operator itself are not listed: they do not
+        change with the seed, so they are not needed to replay the call.
+
+        Returns a tuple of (expression, profile).
+        """
+        profile: OperatorProfile={
+            "category": "MATRIX_UNARY",
+            "name": name,
+            "config": config,
+        }
+        return (expression, profile)
+
+    @staticmethod
+    def abs_(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `abs` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile("abs", {}, f"abs({x})")
+
+    @staticmethod
+    def days_from_last_change(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `days_from_last_change` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile(
+            "days_from_last_change", {}, f"days_from_last_change({x})"
+        )
+
+    @staticmethod
+    def hump(
+        x: str,
+        hump: float | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `hump` FASTEXPR over one matrix field id."""
+        if hump is None:
+            hump=FloatSampler.sample(seed=None, stream=MatrixUnary.HUMP_STREAM, distribution=distribution)
+        return MatrixUnary._profile(
+            "hump", {"hump": hump}, f"hump({x}, hump={hump:.4f})"
+        )
+
+    @staticmethod
+    def inverse(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `inverse` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile("inverse", {}, f"inverse({x})")
+
+    @staticmethod
+    def kth_element(
+        x: str,
+        d: int | None=None,
+        k: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `kth_element` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        if k is None:
+            k=IntegerSampler.sample(
+                MatrixUnary.KTH_ELEMENT_KS, None, MatrixUnary.KTH_ELEMENT_K_STREAM, distribution="uniform"
+            )
+        ignore=MatrixUnary.KTH_ELEMENT_IGNORE[k]
+        return MatrixUnary._profile(
+            "kth_element",
+            {"d": d, "k": k, "ignore": ignore},
+            f"kth_element({x}, {d}, k={k}, ignore='{ignore}')",
+        )
+
+    @staticmethod
+    def last_diff_value(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `last_diff_value` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile(
+            "last_diff_value", {"d": d}, f"last_diff_value({x}, {d})"
+        )
+
+    @staticmethod
+    def log(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `log` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile("log", {}, f"log({x})")
+
+    @staticmethod
+    def normalize(
+        x: str,
+        use_std: bool | None=None,
+        limit: float | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `normalize` FASTEXPR over one matrix field id."""
+        if use_std is None:
+            use_std=bool(
+                IntegerSampler.sample((0, 1), None, MatrixUnary.NORMALIZE_USE_STD_STREAM, distribution="uniform")
+            )
+        if limit is None:
+            limit=FloatSampler.sample(seed=None, stream=MatrixUnary.NORMALIZE_LIMIT_STREAM, distribution=distribution)
+        return MatrixUnary._profile(
+            "normalize",
+            {"useStd": use_std, "limit": limit},
+            f"normalize({x}, useStd={'true' if use_std else 'false'}, limit={limit:.4f})",
+        )
+
+    @staticmethod
+    def pasteurize(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `pasteurize` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile("pasteurize", {}, f"pasteurize({x})")
+
+    @staticmethod
+    def quantile(
+        x: str,
+        driver: str | None=None,
+        sigma: float | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `quantile` FASTEXPR over one matrix field id."""
+        if driver is None:
+            driver=MatrixUnary.DRIVERS[
+                IntegerSampler.sample(
+                    (0, len(MatrixUnary.DRIVERS) - 1), None, MatrixUnary.DRIVER_STREAM, distribution="uniform"
+                )
+            ]
+        if sigma is None:
+            sigma=FloatSampler.sample(seed=None, stream=MatrixUnary.QUANTILE_SIGMA_STREAM, distribution=distribution)
+        return MatrixUnary._profile(
+            "quantile",
+            {"driver": driver, "sigma": sigma},
+            f"quantile({x}, driver='{driver}', sigma={sigma:.4f})",
+        )
+
+    @staticmethod
+    def rank(
+        x: str,
+        rate: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="uniform"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `rank` FASTEXPR over one matrix field id."""
+        if rate is None:
+            rate=IntegerSampler.sample((0, 2), None, MatrixUnary.RANK_RATE_STREAM, distribution=distribution)
+        return MatrixUnary._profile("rank", {"rate": rate}, f"rank({x}, rate={rate})")
+
+    @staticmethod
+    def reverse(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `reverse` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile("reverse", {}, f"reverse({x})")
+
+    @staticmethod
+    def scale(
+        x: str,
+        book_size: int | None=None,
+        long_scale: int | None=None,
+        short_scale: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="uniform"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `scale` FASTEXPR over one matrix field id."""
+        if book_size is None:
+            book_size=IntegerSampler.sample(
+                MatrixUnary.SCALE_BOOK_SIZES, None, MatrixUnary.SCALE_BOOK_STREAM, distribution=distribution
+            )
+        if long_scale is None:
+            long_scale=IntegerSampler.sample(
+                MatrixUnary.SCALE_BOOK_SIZES, None, MatrixUnary.SCALE_LONG_STREAM, distribution=distribution
+            )
+        if short_scale is None:
+            short_scale=IntegerSampler.sample(
+                MatrixUnary.SCALE_BOOK_SIZES, None, MatrixUnary.SCALE_SHORT_STREAM, distribution=distribution
+            )
+        return MatrixUnary._profile(
+            "scale",
+            {"scale": book_size, "longscale": long_scale, "shortscale": short_scale},
+            f"scale({x}, scale={book_size}, longscale={long_scale}, shortscale={short_scale})",
+        )
+
+    @staticmethod
+    def sign(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `sign` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile("sign", {}, f"sign({x})")
+
+    @staticmethod
+    def sqrt(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `sqrt` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile(
+            "sqrt", {}, f"if_else(x >= 0, sqrt({x}), sign({x})*sqrt(abs({x})))"
+        )
+
+    @staticmethod
+    def tail(
+        x: str,
+        d: int | None=None,
+        lower: float | None=None,
+        upper: float | None=None,
+        newval: float | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `tail` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        if lower is None:
+            lower=FloatSampler.sample((0.0, 0.7), None, MatrixUnary.TAIL_LOWER_STREAM, distribution=distribution)
+        if upper is None:
+            upper=FloatSampler.sample((0.3, 1.0), None, MatrixUnary.TAIL_UPPER_STREAM, distribution=distribution)
+        if newval is None:
+            newval=FloatSampler.sample((0.0, 1.0), None, MatrixUnary.TAIL_NEWVAL_STREAM, distribution=distribution)
+        lower, upper=min(lower, upper), max(lower, upper)
+        return MatrixUnary._profile(
+            "tail",
+            {"d": d, "lower": lower, "upper": upper, "newval": newval},
+            f"tail(ts_rank({x}, {d}), lower={lower:.4f}, upper={upper:.4f}, newval={newval:.4f})",
+        )
+
+    @staticmethod
+    def ts_arg_max(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_arg_max` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_arg_max", {"d": d}, f"ts_arg_max({x}, {d})")
+
+    @staticmethod
+    def ts_arg_min(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_arg_min` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_arg_min", {"d": d}, f"ts_arg_min({x}, {d})")
+
+    @staticmethod
+    def ts_av_diff(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_av_diff` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_av_diff", {"d": d}, f"ts_av_diff({x}, {d})")
+
+    @staticmethod
+    def ts_backfill(
+        x: str,
+        d: int | None=None,
+        k: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_backfill` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        if k is None:
+            k=IntegerSampler.sample((1, 5), None, MatrixUnary.TS_BACKFILL_K_STREAM, distribution=distribution)
+        return MatrixUnary._profile(
+            "ts_backfill", {"lookback": d, "k": k}, f"ts_backfill({x}, lookback={d}, k={k})"
+        )
+
+    @staticmethod
+    def ts_count_nans(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_count_nans` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile(
+            "ts_count_nans", {"d": d}, f"ts_count_nans({x}, {d})"
+        )
+
+    @staticmethod
+    def ts_decay_linear(
+        x: str,
+        d: int | None=None,
+        dense: bool | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_decay_linear` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        if dense is None:
+            dense=bool(IntegerSampler.sample((0, 1), None, MatrixUnary.DENSE_STREAM, distribution="uniform"))
+        return MatrixUnary._profile(
+            "ts_decay_linear",
+            {"d": d, "dense": dense},
+            f"ts_decay_linear({x}, {d}, dense={'true' if dense else 'false'})",
+        )
+
+    @staticmethod
+    def ts_delay(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_delay` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_delay", {"d": d}, f"ts_delay({x}, {d})")
+
+    @staticmethod
+    def ts_delta(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_delta` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_delta", {"d": d}, f"ts_delta({x}, {d})")
+
+    @staticmethod
+    def ts_ir(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_ir` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_ir", {"d": d}, f"ts_ir({x}, {d})")
+
+    @staticmethod
+    def ts_kurtosis(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_kurtosis` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_kurtosis", {"d": d}, f"ts_kurtosis({x}, {d})")
+
+    @staticmethod
+    def ts_max_diff(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_max_diff` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_max_diff", {"d": d}, f"ts_max_diff({x}, {d})")
+
+    @staticmethod
+    def ts_mean(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_mean` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_mean", {"d": d}, f"ts_mean({x}, {d})")
+
+    @staticmethod
+    def ts_product(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_product` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_product", {"d": d}, f"ts_product({x}, {d})")
+
+    @staticmethod
+    def ts_quantile(
+        x: str,
+        d: int | None=None,
+        driver: str | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_quantile` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        if driver is None:
+            driver=MatrixUnary.DRIVERS[
+                IntegerSampler.sample(
+                    (0, len(MatrixUnary.DRIVERS) - 1), None, MatrixUnary.DRIVER_STREAM, distribution="uniform"
+                )
+            ]
+        return MatrixUnary._profile(
+            "ts_quantile",
+            {"d": d, "driver": driver},
+            f"ts_quantile({x}, {d}, driver='{driver}')",
+        )
+
+    @staticmethod
+    def ts_rank(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_rank` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_rank", {"d": d}, f"ts_rank({x}, {d})")
+
+    @staticmethod
+    def ts_returns(
+        x: str,
+        d: int | None=None,
+        mode: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_returns` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        if mode is None:
+            mode=IntegerSampler.sample((1, 2), None, MatrixUnary.TS_RETURNS_MODE_STREAM, distribution="uniform")
+        return MatrixUnary._profile(
+            "ts_returns", {"d": d, "mode": mode}, f"ts_returns({x}, {d}, mode={mode})"
+        )
+
+    @staticmethod
+    def ts_scale(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_scale` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_scale", {"d": d}, f"ts_scale({x}, {d})")
+
+    @staticmethod
+    def ts_std_dev(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_std_dev` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_std_dev", {"d": d}, f"ts_std_dev({x}, {d})")
+
+    @staticmethod
+    def ts_sum(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_sum` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_sum", {"d": d}, f"ts_sum({x}, {d})")
+
+    @staticmethod
+    def ts_target_tvr_decay(
+        x: str,
+        lambda_min: float | None=None,
+        lambda_max: float | None=None,
+        target_tvr: float | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_target_tvr_decay` FASTEXPR over one matrix field id."""
+        if lambda_min is None:
+            lambda_min=FloatSampler.sample(
+                (0.0, 0.7), None, MatrixUnary.TS_TARGET_TVR_LAMBDA_MIN_STREAM, distribution=distribution
+            )
+        if lambda_max is None:
+            lambda_max=FloatSampler.sample(
+                (0.3, 1.0), None, MatrixUnary.TS_TARGET_TVR_LAMBDA_MAX_STREAM, distribution=distribution
+            )
+        if target_tvr is None:
+            target_tvr=FloatSampler.sample(
+                (0.1, 0.4), None, MatrixUnary.TS_TARGET_TVR_TARGET_STREAM, distribution=distribution
+            )
+        lambda_min, lambda_max=min(lambda_min, lambda_max), max(lambda_min, lambda_max)
+        return MatrixUnary._profile(
+            "ts_target_tvr_decay",
+            {"lambda_min": lambda_min, "lambda_max": lambda_max, "target_tvr": target_tvr},
+            f"ts_target_tvr_decay({x}, lambda_min={lambda_min:.4f}, lambda_max={lambda_max:.4f}, target_tvr={target_tvr:.4f})",
+        )
+
+    @staticmethod
+    def ts_target_tvr_hump(
+        x: str,
+        lambda_min: float | None=None,
+        lambda_max: float | None=None,
+        target_tvr: float | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_target_tvr_hump` FASTEXPR over one matrix field id."""
+        if lambda_min is None:
+            lambda_min=FloatSampler.sample(
+                (0.0, 0.7), None, MatrixUnary.TS_TARGET_TVR_LAMBDA_MIN_STREAM, distribution=distribution
+            )
+        if lambda_max is None:
+            lambda_max=FloatSampler.sample(
+                (0.3, 1.0), None, MatrixUnary.TS_TARGET_TVR_LAMBDA_MAX_STREAM, distribution=distribution
+            )
+        if target_tvr is None:
+            target_tvr=FloatSampler.sample(
+                (0.1, 0.6), None, MatrixUnary.TS_TARGET_TVR_TARGET_STREAM, distribution=distribution
+            )
+        lambda_min, lambda_max=min(lambda_min, lambda_max), max(lambda_min, lambda_max)
+        return MatrixUnary._profile(
+            "ts_target_tvr_hump",
+            {"lambda_min": lambda_min, "lambda_max": lambda_max, "target_tvr": target_tvr},
+            f"ts_target_tvr_hump({x}, lambda_min={lambda_min:.4f}, lambda_max={lambda_max:.4f}, target_tvr={target_tvr:.4f})",
+        )
+
+    @staticmethod
+    def ts_zscore(
+        x: str,
+        d: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `ts_zscore` FASTEXPR over one matrix field id."""
+        if d is None:
+            d=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile("ts_zscore", {"d": d}, f"ts_zscore({x}, {d})")
+
+    @staticmethod
+    def winsorize(
+        x: str,
+        std: float | None=None,
+        window: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `winsorize` FASTEXPR over one matrix field id."""
+        if std is None:
+            std=FloatSampler.sample(
+                (0.01, 0.2), None, MatrixUnary.WINSORIZE_STD_STREAM, distribution=distribution
+            )
+        if window is None:
+            window=IntegerSampler.sample(
+                MatrixUnary.WINDOW_DAYS,
+                None,
+                MatrixUnary.WINSORIZE_WINDOW_STREAM,
+                distribution=distribution,
+            )
+        return MatrixUnary._profile(
+            "winsorize",
+            {"std": std, "window": window},
+            f"winsorize(ts_rank({x},{window}), std={std:.4f})",
+        )
+
+    @staticmethod
+    def zscore(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `zscore` FASTEXPR over one matrix field id."""
+        return MatrixUnary._profile("zscore", {}, f"zscore({x})")

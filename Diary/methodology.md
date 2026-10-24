@@ -264,3 +264,73 @@ Nói cách khác: **`EUR` + `USA` chiếm 22/41 = 53.7 % draw nhưng chỉ 4/16 
 Lưu ý phát hiện được, **chưa sửa**: default `distribution` không nhất quán giữa các tầng — `sample_int` và `MatrixBinary.get` mặc định `"uniform"`, còn `ts_corr`/`ts_covariance`/`ts_regression` mặc định `"balanced"`. Hệ quả: gọi trực tiếp hàm `ts_*` ra window balanced, còn gọi qua `get()` (đường mà `main.py` dùng) ra uniform. Cần một quyết định chung — hoặc mặc định `"uniform"` ở mọi tầng (giữ hành vi hiện tại của pipeline), hoặc `"balanced"` ở mọi tầng (giữ hành vi hiện tại của hàm `ts_*`). Đã ghi vào bảng giới hạn §9 của `Docs/all-operators.md`, chưa tự quyết.
 
 **Sentiment:** 8 — quyết định này quyết định **bias của toàn bộ không gian alpha** sinh ra; reviewer chắc chắn hỏi về nó, và mặc định lệch giữa các tầng là loại lỗi âm thầm mà phải nói ra.
+
+## 2026-10-24T08:37:06Z | methodology | score: 8
+
+**Decision:** Trong 40 builder `MATRIX_UNARY`, **chỉ rút tham số có miền giá trị đã được platform document**; tham số mà catalog không liệt kê thì giữ nguyên giá trị platform ship.
+
+**Alternatives considered:**
+- Rút `ts_returns`' `mode` từ một miền tự đặt (ví dụ `(1, 2)`) — **bịa thuật toán**: platform chỉ ship `mode = 1`, mô tả chỉ nói "Returns the relative change in the x value", và web search (WorldQuant docs, AlphaLab, Tymen wiki, các repo `world-quant-brain`) **không tìm được** tài liệu nào liệt kê mode. Đây là vi phạm trực tiếp "never fabricate methods" — không có nguồn thì không được giả định miền giá trị.
+- Bỏ hẳn `mode` khỏi expression (`ts_returns(x, d)`) — sai: platform ship `mode = 1` **có mặt trong definition**, nên bỏ đi là lệch với cú pháp platform nhận, và `config` sẽ mất thông tin về tham số đó.
+- Rút cả `mode` lẫn `constant`/`hump`/`sigma`/`target_tvr` — cùng lý do: các tham số này có giá trị cố định do chính operator định nghĩa, không phải người dùng chọn. Rút chúng sẽ tạo ra biến thể không có ý nghĩa nghiên cứu (ví dụ `hump = 0.37`).
+
+**Rationale:** Ranh giới là **tính chất của tham số**, không phải "tham số nào có thể rút":
+
+| Loại | Ví dụ | Hành động |
+|---|---|---|
+| Ngưỡng/độ dài | `d` (window), `k` (thứ hạng), `std` (số lệch chuẩn) | rút trong khoảng có ý nghĩa |
+| Lựa chọn hữu hạn | `driver` (gaussian/cauchy/uniform), `dense` (bool) | rút trong tập đã nêu ở mô tả platform |
+| Hằng của operator | `mode = 1`, `constant = 0`, `sigma = 1.0`, `hump = 0.01`, `lambda_min/max`, `target_tvr` | giữ nguyên, không vào `config` |
+
+`driver` là trường hợp rõ nhất: mô tả platform nêu tên cả ba phân phối ("gaussian, cauchy, or uniform") nên rút được và miền là **có căn cứ**. `std` của `winsorize` cũng vậy: mô tả khuyến nghị "std values range from 2 to 5" và liệt kê xác suất cắt cho từng giá trị — đó là miền có nguồn. Ngược lại `mode` không có bất kỳ mô tả nào, nên rút nó là **đoán**.
+
+**Impact on reported results:** Chưa có con số nào được báo cáo (đây là bước sinh expression, chưa phải backtest). Nhưng nó quyết định **không gian alpha** được khám phá: nếu `mode` được rút trong miền bịa, thì 50% alpha sinh ra sẽ dùng một chế độ tính lợi nhuận mà **không ai biết nó nghĩa là gì** — không giải thích được, không tái lập được, không kiểm chứng được. Giữ `mode = 1` nghĩa là mọi alpha `ts_returns` đều dùng một chế độ đã biết, và biến thể chưa rõ thì để ngỏ cho tới khi có tài liệu.
+
+**Sentiment:** 8 — reviewer sẽ hỏi "alpha nào của bạn dùng `mode` khác 1?" và câu trả lời "không có, vì platform không document mode nào khác" là câu trả lời có căn cứ; ngược lại, miền giá trị bịa sẽ là điểm reviewer bắt được ngay.
+
+## 2026-10-24T19:41:06Z | methodology | score: 9
+
+**Decision:** Tách `OperatorProfile` thành 3 keys (`category`, `name`, `config`) và return tuple `(expression, profile)` từ mọi builder, thay vì return chỉ expression string và giữ inputs/matrics/expression trong profile.
+
+**Alternatives considered:**
+- **Giữ `expression` trong `OperatorProfile`**: profile sẽ self-contained, caller chỉ cần nhận một object. Loại bỏ vì expression là artifact phái sinh từ config, không phải config input — ghi lại nó trong profile là trùng lặp thông tin và gây nhầm lẫn về nguồn gốc (config sinh ra expression, hay expression sinh ra config?).
+- **Giữ `inputs` và `matrics` trong profile**: có thể truy vết được các toán hạng đầu vào. Loại bỏ vì `inputs` chỉ là tên biến placeholder (`x`, `y`) không mang thông tin tái tạo; `matrics` là typo của "matrices" và chưa rõ ngữ nghĩa — cả hai không phải config mà là metadata về kiểu toán tử, đã có trong `category`.
+- **Return chỉ expression, không có profile**: đơn giản nhất, giống code cũ. Loại bỏ vì mất khả năng reproduce — khi một expression tạo ra alpha tốt, không biết được nó dùng `seed` bao nhiêu, `distribution` nào, `d` bao nhiêu để replay hay debug.
+
+**Rationale:** Pipeline tự động sinh alpha cần hai đầu ra riêng biệt:
+1. **Expression** (ready-to-run FASTEXPR) để submit lên BRAIN API — đây là sản phẩm cuối.
+2. **Config audit trail** (seed/stream/distribution/parameters) để ghi log, replay, debug — đây là metadata cho reproducibility.
+
+Nhét cả hai vào một object thì caller phải biết key nào để lấy expression → coupling tăng. Tách ra tuple thì caller unpack ngay `expr, prof = ...` — code rõ ràng hơn, và caller chỉ dùng expression để submit thường không cần giữ profile (trừ khi ghi log). Convention này khớp với chuẩn Python: function thường return data trước, metadata sau (ví dụ `np.unique(return_counts=True)` return `(values, counts)`, không phải dict).
+
+`config` dict chứa tất cả parameters ảnh hưởng đến expression: `seed`, `stream`, `d`, `method`, `distribution`, `driver`, `useStd`, v.v. — đủ để tái tạo expression bit-exact. Không chứa constant của operator platform (vd. `mode=1`, `constant=0`) vì chúng không phải config được sample mà là hằng số hard-code.
+
+**Impact on reported results:** Chưa có số liệu backtest. Nhưng kiến trúc này quyết định liệu pipeline có thể **tái tạo alpha** hay không: nếu một alpha đạt Sharpe 2.5 nhưng không biết config, thì không thể verify lại expression, không thể ablation study trên từng parameter, không thể giải thích cho reviewer "alpha này khác alpha kia ở chỗ nào". Với `OperatorProfile` chứa đủ config, mọi alpha có audit trail đầy đủ từ lúc sinh ra.
+
+**Sentiment:** 9 — cross-cutting, ảnh hưởng toàn bộ codebase operator (50 operators hiện tại, ~200 operators khi đủ 9 categories), quyết định reproducibility của toàn bộ pipeline, reviewer sẽ bắt buộc hỏi về design choice này.
+
+## 2026-10-25T03:21:00Z | methodology | score: 10
+
+**Decision:** Builder signatures phải nhận tất cả sampled parameters như optional arguments (`d=None`, `k=None`, `hump=None`, v.v.), chỉ sample khi parameter là `None`. Pattern: `if d is None: d = IntegerSampler.sample(...)` thay vì `d = IntegerSampler.sample(...)` luôn.
+
+**Alternatives considered:**
+- **Giữ pattern cũ — sample luôn bên trong, signature không nhận parameter:** đơn giản hơn, ít code hơn. Loại bỏ vì `config` lưu `{"d": 238}` nhưng không có cách gọi lại builder với `d=238` → không reproduce được bit-exact expression → phá vỡ audit trail.
+- **Tách làm 2 methods — `random_last_diff_value()` và `fixed_last_diff_value(d)`:** rõ ràng về ý đồ (random vs fixed), tránh `if is None`. Loại bỏ vì nhân đôi số method (80 thay vì 40 cho MatrixUnary), và caller phải biết gọi method nào khi replay từ config → coupling tăng, DRY vi phạm.
+- **Thêm parameter `seed` vào signature, dùng seed để reproduce:** signature `last_diff_value(x, seed)`, caller truyền seed cũ thì sẽ sample ra `d` giống cũ. Loại bỏ vì: (1) seed là implementation detail, không phải config user-visible; (2) khi cần ablation study (thử `d=21` vs `d=63` giữ nguyên mọi thứ khác), không thể chỉ thay `d` — phải tìm seed nào sinh ra `d=21`, seed nào sinh ra `d=63` → không khả thi.
+
+**Rationale:** Reproducibility requirement của research codebase đòi hỏi: **từ `config` dict có thể tái tạo bit-exact expression**. Config chứa các giá trị đã sample (`{"d": 238, "driver": "gaussian"}`), không chứa seed/stream (vì đó là implementation detail). Khi replay, caller gọi `MatrixUnary.last_diff_value("field_a", d=238, driver="gaussian")` — builder nhận values cụ thể, không sample nữa, return expression giống hệt lần đầu.
+
+Pattern này khớp với convention của MatrixBinary (đã có từ đầu): `ts_corr(x, y, d=None, seed=None)` — có thể gọi random `ts_corr(x, y)` hoặc fixed `ts_corr(x, y, d=96)`. Refactor này làm MatrixUnary đồng nhất với MatrixBinary.
+
+31 trong 40 MatrixUnary operators có sampled parameters được refactor; 9 operators không đổi (không có parameters: `abs_`, `inverse`, `log`, v.v.). Seed logic giữ nguyên 100% (không thay đổi gì về `IntegerSampler.sample` hay stream constants) — chỉ thêm `if param is None:` guard.
+
+Verified: `uv run python main.py` exit 0. Audit: rà soát toàn bộ `IntegerSampler.sample` với `WINDOW_DAYS` → xác nhận tất cả dùng `distribution="balanced"` (không có vi phạm convention).
+
+**Impact on reported results:** Kiến trúc này là **foundation của reproducibility**. Mọi alpha expression từ giờ có thể:
+1. **Replay bit-exact:** lưu config vào database, replay sau 6 tháng / 1 năm → expression giống hệt.
+2. **Ablation study:** so sánh alpha A (`d=21`) vs alpha B (`d=63`) giữ nguyên mọi thứ khác — chỉ cần gọi builder với `d` khác nhau.
+3. **Paper appendix:** liệt kê exact config của 100 top alphas trong table — reviewer có thể verify từng cái một.
+
+Nếu không có pattern này, pipeline chỉ có thể sinh alpha mới, không thể tái tạo alpha cũ → không qualify làm research codebase.
+
+**Sentiment:** 10 — đây là điều kiện tiên quyết (prerequisite) của reproducibility, ảnh hưởng toàn bộ workflow từ alpha generation → backtesting → publication. Không có quyết định này thì không thể đạt publication-grade reproducibility. Reviewer sẽ reject paper nếu không thể verify lại alphas.

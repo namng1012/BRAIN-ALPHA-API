@@ -1,9 +1,12 @@
 import sys
+from typing import Literal
 
 from Functions.cache import CATALOG_MAX_AGE_SECONDS
 from Functions.data import BrainData, CatalogBuilder
 from Functions.login import RELOGIN_THRESHOLD_SECONDS, BrainLogin
-from Functions.operators import OPERATORS_CSV_PATH, MatrixBinary, OperatorTable
+from Functions.operators import OPERATORS_CSV_PATH, MatrixBinary, MatrixUnary, OperatorProfile, OperatorTable
+from Functions.random import FloatSampler, IntegerSampler
+
 
 
 def main():
@@ -134,8 +137,56 @@ def main():
         "ts_regression",
         "vector_neut",
     ):
-        profile = MatrixBinary.get(name, x, y)
-        print(f"  {name:14s} {profile['expression']}")
+        expression, profile = MatrixBinary.get(name, x, y)
+        print(f"  {name:14s} {expression}")
+
+    # The MATRIX_UNARY builders take one matrix field, so they are run over the
+    # first of the two sampled ids.
+    print("\nUnary expression examples")
+    for name in [
+        "abs",
+        "days_from_last_change",
+        "hump",
+        "inverse",
+        "kth_element",
+        "last_diff_value",
+        "log",
+        "normalize",
+        "pasteurize",
+        "quantile",
+        "rank",
+        "reverse",
+        "scale",
+        "sign",
+        "sqrt",
+        "tail",
+        "ts_arg_max",
+        "ts_arg_min",
+        "ts_av_diff",
+        "ts_backfill",
+        "ts_count_nans",
+        "ts_decay_linear",
+        "ts_delay",
+        "ts_delta",
+        "ts_ir",
+        "ts_kurtosis",
+        "ts_max_diff",
+        "ts_mean",
+        "ts_product",
+        "ts_quantile",
+        "ts_rank",
+        "ts_returns",
+        "ts_scale",
+        "ts_std_dev",
+        "ts_sum",
+        "ts_target_tvr_decay",
+        "ts_target_tvr_hump",
+        "ts_zscore",
+        "winsorize",
+        "zscore",
+    ]:
+        expression, profile = MatrixUnary.get(name, x)
+        print(f"  {name:22s} {expression}")
 
 
 if __name__ == "__main__":

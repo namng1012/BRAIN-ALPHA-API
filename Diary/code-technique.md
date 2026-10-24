@@ -420,3 +420,148 @@ Tên method cũng đổi theo: `_balanced_buckets()` → `buckets()`. Tiền t�
 **Reusable in:** mọi cặp "hằng số + hàm dùng hằng số" — bảng tham số + hàm tra cứu, danh sách bucket + hàm chia bucket, từ điển + hàm build. Khi đó dùng `classmethod` chứ không phải module-level constant + `staticmethod`.
 
 **Sentiment:** 7 — reviewer sẽ hỏi "vì sao `classmethod` chứ không phải `staticmethod`?", và câu trả lời (một nguồn sự thật cho hằng số bucket) là điều đáng giữ; verify bit-exact 240/240 trên bản refactor là thứ chứng minh việc đổi cấu trúc không đổi số.
+
+## 2026-10-24T08:37:06Z | code-technique | score: 7
+
+**Where:** `main.py` — 40 builder `MATRIX_UNARY` (dòng ~40-540), `MATRIX_UNARY_BUILDERS`, `abs_`
+
+**Pattern:** Sinh FASTEXPR theo bucket dạng **hàm module-level, không class** — mỗi operator một `def` trả về profile dict, cộng một dict `MATRIX_UNARY_BUILDERS` làm bảng tra. Không dùng `get(name, x)` như `MatrixBinary` vì 40 operator unary **không cùng chữ ký**: `ts_mean(x, d)` nhận window, còn `abs(x)` không nhận gì, `kth_element(x, d, k)` nhận hai tham số phụ.
+
+**Why:** Điểm cần giữ cho mọi builder trong nhóm này:
+
+1. **Tên hàm không được trùng builtin.** `def abs(...)` ở cấp module đã shadow builtin `abs`, khiến `abs(left)` trong `main()` gọi nhầm function của tôi → `TypeError: unsupported format string passed to dict.__format__`. Sửa bằng `abs_` (tên platform vẫn là `abs` qua key trong dict). Bài học: traceback chỉ ra dòng lỗi nhưng không chỉ ra nơi gây ra; phải `hasattr(builtins, name)` quét toàn bộ tên module-level mới ra. Ruff **không** cảnh báo loại này.
+
+2. **Chỉ rút tham số có miền giá trị đã được platform document.** `d` (1-252), `k` (1-d), `std` (2-5, khoảng platform khuyến nghị), `driver` (gaussian/cauchy/uniform, nêu tên trong mô tả), `dense` (bool) được rút. `ts_returns` **không** rút `mode`: platform chỉ ship `mode = 1`, mô tả không liệt kê mode khác, và web search không tìm được tài liệu — giữ nguyên `mode = 1` thay vì bịa miền.
+
+3. **Render đúng cú pháp của platform, không đồng nhất giữa các operator.** `quantile` dùng `driver = gaussian` (identifier trần) còn `ts_quantile` dùng `driver="gaussian"` (chuỗi có quotes) — hai operator cùng tên tham số nhưng cú pháp khác nhau, theo đúng definition platform.
+
+4. **`config` chỉ chứa tham số biến theo seed.** Tham số cố định (`hump = 0.01`, `sigma = 1.0`, `constant = 0`, `mode = 1`, `lambda_min/max`, `target_tvr`) không vào `config` — chúng đọc ra từ `expression` là biết.
+
+**Reusable in:** bucket `VECTOR` (7), `GROUP` (9), `GROUPING`, `MATRIX_GENERATED` — cùng nguyên tắc: một `def` mỗi operator, key trong dict tra, tham số rút chỉ khi có miền đã document, render bám definition của từng operator.
+
+**Sentiment:** 7 — reviewer sẽ hỏi "vì sao `mode` không rút mà `std` thì rút?" và "vì sao `quantile` và `ts_quantile` render khác nhau"; hai câu trả lời đều dựa trên definition platform, đáng giữ.
+
+## 2026-10-24T08:52:51Z | code-technique | score: 7
+
+**Where:** `main.py` — 40 builder `MATRIX_UNARY` (đã đổi từ profile sang chuỗi thuần)
+
+**Pattern:** Builder trả về **chuỗi FASTEXPR thuần** (`-> str`) thay vì profile dict. `_unary_profile()` và `UnaryProfile` TypedDict bị xóa hoàn toàn; `main()` in thẳng `builder(x)`.
+
+**Why:** Profile chỉ hữu ích khi cần **replay** — tức là biết tham số nào đã được rút để tái tạo lại lời gọi. Ở tầng hiện tại chưa có bước replay nào, nên profile là dữ liệu dư thừa: chuỗi FASTEXPR đã chứa đủ thông tin để đọc lại tham số bằng `parse`, và thêm `category`/`name`/`config` chỉ là nhân bản thứ đã biết từ tên hàm.
+
+Điểm đáng lưu: đây là **sự phân tách trách nhiệm** đúng — `MATRIX_BINARY` vẫn trả profile (`Functions/operators.py`), vì tầng đó có `MatrixBinary.get(name, x, y)` với chữ ký đồng nhất cho mọi operator nên profile là điều kiện cần để dispatch. Ngược lại 40 operator unary có **chữ ký khác nhau** (`abs(x)` vs `ts_mean(x, d)` vs `kth_element(x, d, k)`), nên chỉ cần một `def` riêng mỗi operator — và chỉ cần trả về thứ duy nhất mà caller dùng.
+
+**Bài học (về refactor bằng script):** lần đầu tôi chuyển đổi 40 chỗ bằng script parse-string. Script **làm hỏng 6 hàm** có f-string chứa quote lồng nhau (`f'kth_element({x}, {d}, {k}, ignore = "NaN")'`, `f'ts_quantile(..., driver = "{driver}")'`, `f"... dense = {'true' if dense else 'false'}"`) — parser string-aware của tôi không phân biệt được quote của f-string với quote của biểu thức, nên 6 hàm bị cắt thành `return` rỗng. Ruff **không bắt** (`return` rỗng là code hợp lệ về cú pháp) và `py_compile` cũng không bắt — chỉ đến khi chạy verify "return type là `str`" mới lộ ra 6/40 hỏng. Bài học: refactor hàng loạt bằng script **phải** có một assert hậu kiểm về *kiểu trả về*, không chỉ lint + compile.
+
+**Reusable in:** mọi builder sinh expression — nếu chưa có bước replay thì trả chuỗi; khi nào thực sự cần replay (log tham số đã rút, regenerate expression từ seed) mới nâng lên profile.
+
+**Sentiment:** 7 — ranh giới "profile chỉ đáng có khi đã có bước replay" là nguyên tắc reviewer sẽ hỏi ("tại sao bạn bỏ thông tin replay?"), và câu trả lời là chưa tới lúc dùng.
+
+## 2026-10-24T15:29:51Z | code-technique | score: 7
+
+**Where:** `Functions/operators.py` — `class FloatSampler` (đặt ngay sau `IntegerSampler`)
+
+**Pattern:** Float sampler **song song cấu trúc** với `IntegerSampler`: cùng `BUCKET_FRACTIONS` / `BUCKET_COUNT` (tái dùng trực tiếp từ `IntegerSampler` qua `BUCKET_FRACTIONS = IntegerSampler.BUCKET_FRACTIONS`, không copy giá trị), cùng cặp `seed` / `stream`, cùng `distribution="uniform" | "balanced"`, cùng `rng = np.random.default_rng([seed, stream])`.
+
+**Khác biệt cần thiết so với `IntegerSampler`:**
+- Range là **liên tục** nên `buckets()` dùng **span** (`count = max - min`) thay vì **số phần tử** (`count = max - min + 1`), và cut là `count * fraction` chứ không phải `round(count * fraction)` — số phần tử nguyên cần làm tròn, span thập phân thì không.
+- Giá trị trả về được `round(value, 4)` → **4 chữ số sau dấu phẩy**, để FASTEXPR render ổn định giữa các lần chạy.
+- `rng.uniform(lo, hi)` thay cho `rng.integers`.
+
+**Về ranh giới bucket:** công thức chặn dưới/nhưng phải dùng `upper_bound = count * (1 - (BUCKET_COUNT - index) / BUCKET_COUNT)` — đây là ranh giới *tương đối* (phần còn lại phân bổ đều cho các bucket sau), khác `IntegerSampler` dùng `count - (BUCKET_COUNT - index)` (ranh giới *tuyệt đối* theo số phần tử). Sai chỗ này thì bucket cuối có thể bị âm.
+
+**Vì sao dùng chung `BUCKET_FRACTIONS` thay vì copy:** copy sẽ tạo **hai nguồn sự thật** — đổi một bên thì bên kia lệch, và phân phối balanced của int và float sẽ không còn cùng hình dạng. Ràng buộc bằng tham chiếu để `IntegerSampler` và `FloatSampler` **luôn** cùng tỉ lệ.
+
+**Reusable in:** mọi sampler thêm sau này (bool sampler, categorical sampler) — lặp lại y hệt khuôn này: `BUCKET_FRACTIONS` tham chiếu chéo, `seed`/`stream` độc lập, `round()` ở cuối để text ổn định.
+
+**Sentiment:** 7 — khác biệt "span vs số phần tử" và "ranh giới tương đối vs tuyệt đối" là hai chỗ dễ sai im lặng; reviewer sẽ hỏi tại sao float không dùng lại logic của int.
+
+## 2026-10-24T15:32:12Z | code-technique | score: 7
+
+**Where:** `main.py` — `hump()` builder (dòng ~49-60), `HUMP_STREAM = 6`
+
+**Pattern:** Gắn `FloatSampler` vào một operator float của catalog. Platform định nghĩa `hump(x, hump = 0.01)` — keyword `hump` là **float**. Builder đổi từ hằng số cứng `0.01` sang rút ngẫu nhiên trong window `[0, 3]`, với `FloatSampler.sample(seed=seed, stream=HUMP_STREAM)`.
+
+**Vì sao tên tham số là `hump_value` chứ không phải `hump`:** `hump` đã là tên của chính operator; tham số cùng tên sẽ che mất ý nghĩa khi đọc `hump(x, hump = {hump})`. Tên `hump_value` phân biệt được *tham số* với *operator*.
+
+**Vì sao cần `HUMP_STREAM = 6` riêng:** `FloatSampler` dùng chung `np.random.default_rng([seed, stream])` với `IntegerSampler`. Nếu để `stream=0` (mặc định) thì `hump` sẽ dùng **chung** sub-stream với các draw khác trên `stream=0` → thêm một draw mới có thể **dịch chuyển giá trị** của các draw cũ. Stream riêng giữ đúng tính chất "thêm draw không làm đổi draw cũ" mà `IntegerSampler` đã cam kết. Đã dùng `stream=6` vì `1..5` đã cấp cho window / kth_element k / winsorize std / driver / dense.
+
+**Về `P(hump < 0.01) = 0.36%`:** đây là hệ quả trực tiếp của việc rút uniform trên `[0, 3]` — giá trị **gần 0** (gần nghĩa "không giới hạn gì") rất hiếm. Với `hump` càng nhỏ thì turnover càng **ít** bị dẹp → alpha gần như không còn tác dụng giảm turnover. Đây là điểm cần reviewer hỏi: **uniform trên [0,3] không phải phân phối tự nhiên của tham số này**, và nếu kết quả phụ thuộc vào `hump` thì nên cân nhắc log-scale hoặc range hẹp hơn quanh 0.01.
+
+**Reusable in:** mọi operator có tham số float trong catalog — `winsorize(std)`, `normalize(limit)`, `quantile(sigma)`, `ts_target_tvr_*(target_tvr, lambda_min, lambda_max)` — cùng khuôn: `FloatSampler.sample(seed=seed, stream=<riêng>)` + tham số tường minh để override.
+
+**Sentiment:** 7 — "stream riêng cho float" và "tên tham số tránh trùng operator" là hai chi tiết dễ bỏ sót; phân phối uniform trên [0,3] cho tham số ngưỡng là một quan sát sẽ bị hỏi khi review.
+
+## 2026-10-24T15:37:48Z | code-technique | score: 7
+
+**Where:** `main.py` — `kth_element()`, hằng số `KTH_ELEMENT_KS` / `KTH_ELEMENT_IGNORE`
+
+**Pattern:** Rút `k` của `kth_element` từ `(1, d)` (rút trong **toàn bộ** cửa sổ) → `(1, 2)` (uniform trên 2 giá trị), và **buộc `ignore` bám theo `k`** qua bảng tra `KTH_ELEMENT_IGNORE = {1: "NaN", 2: "NaN 0"}`.
+
+**Vì sao `ignore` phải là hàm của `k` chứ không phải hằng số:** theo mô tả của platform, `k=1` bỏ qua NaN, còn `k=2` lấy "giá trị khác 0 và khác NaN gần nhất thứ hai" → phải bỏ qua **cả** 0 lẫn NaN. Nếu giữ `ignore = "NaN"` cố định, `k=2` sẽ trả về giá trị 0 — trái với ý nghĩa mà tham số khai báo. Vì vậy `ignore` được **tính từ** `k` sau khi rút, không phải hằng số viết cứng trong f-string.
+
+**Vì sao `(1, 2)` chứ không phải `(1, d)`:** trước đây `k` được rút trong `1..d` với lý do "k chỉ số vào cửa sổ vừa đọc". Nhưng mô tả của platform chỉ định nghĩa **đúng hai** ý nghĩa cho `k` (1 = backfill NaN, 2 = second most recent non-zero non-NaN). Một `k` lớn hơn sẽ chỉ số vào cửa sổ vừa đọc nhưng **không có ý nghĩa đã được tài liệu hoá** → không có "domain đã biết" để lấy mẫu (cùng lập luận đã dùng cho `ts_returns`' `mode`). Rút trên 2 giá trị = uniform, `P(k=1) ≈ P(k=2) ≈ 50%`.
+
+**Hệ quả cần lưu ý (`k > d`):** vì `k` không còn bị ràng buộc bởi `d`, trường hợp `k=2, d=1` là hợp lệ về hình thức nhưng "giá trị khác 0 và khác NaN thứ hai trong 1 ngày" không tồn tại. Đo trên 50k mẫu: **0.246%** rơi vào `k > d`, và **toàn bộ** đều là `d=1 & k=2` (`d==1` chiếm 0.446%). Trước đây (rút trong `1..d`) tỉ lệ này là **0%** — đây là một thay đổi hành vi đã đo được, không phải suy đoán.
+
+**Reusable in:** mọi operator có tham số *phụ thuộc lẫn nhau* — bảng tra là cách rẻ nhất để buộc chúng nhất quán; đặc biệt khi một tham số là **hàm** của tham số kia (`ignore` là hàm của `k`).
+
+**Sentiment:** 7 — "k độc lập với d làm sinh trường hợp k>d ở 0.246%" là thay đổi hành vi đo được mà reviewer sẽ hỏi ("k có luôn ≤ d không?").
+
+## 2026-10-24T15:40:56Z | code-technique | score: 7
+
+**Where:** `main.py` — `normalize()`, hằng số `NORMALIZE_USE_STD_STREAM = 7`, `NORMALIZE_LIMIT_STREAM = 8`
+
+**Pattern:** Operator có **hai tham số khác kiểu** → mỗi tham số một entropy stream riêng. `useStd` là bool nên rút bằng `IntegerSampler.sample((0, 1), ...)` rồi ép `bool(...)` (giống `ts_decay_linear`'s `dense`); `limit` là float nên rút bằng `FloatSampler.sample(seed=..., stream=...)` trên window `[0, 3]`. Platform định nghĩa `normalize(x, useStd = false, limit = 0.0)`.
+
+**Vì sao `limit` phải dùng stream riêng (8) chứ không dùng chung stream 7 với `useStd`:** cả hai đều là draw từ `default_rng([seed, stream])`. Dùng chung stream thì `useStd` sẽ **tiêu tốn entropy** trước `limit`, và giá trị `limit` sẽ phụ thuộc vào giá trị `useStd` — hai tham số **không độc lập**, và thêm/bớt một draw sẽ dịch chuyển draw kia. Tách stream giữ được tính chất "thêm draw không làm đổi draw cũ".
+
+**Về khoảng giá trị của `limit` — điểm khoa học cần chú ý:** `limit` là **bán kính clamp** của kết quả đã chuẩn hoá, nên nó **không cùng đơn vị** giữa hai chế độ:
+- `useStd=true` → kết quả tính bằng **sigma**, nên `limit=0.05` là "chỉ giữ 0.05 sigma".
+- `useStd=false` → kết quả vẫn tính bằng **đơn vị gốc của x** (chỉ trừ mean), nên `limit=0.05` là "0.05 đơn vị của x".
+
+Hệ quả: **cùng một ngưỡng `limit` có ý nghĩa khác hẳn** giữa hai chế độ, và với field có đơn vị lớn (vd. `compustat_liquidity_metric_two`) thì `limit` uniform trên `[0,3]` gần như **không clamp gì cả** → `useStd=false` + `limit` nhỏ coi như vô nghĩa. Đo trên 100k mẫu: `P(limit < 0.1) = 3.28%`, `P(limit < 0.25) = 8.29%`. Trước đây `limit` **cố định 0.0** (nghĩa là **không clamp**, vì clamp về 0 sẽ xoá hết tín hiệu) → hành vi đã đổi, và theo hướng *bớt* nhất quán với việc chuẩn hoá.
+
+**Reusable in:** `rank(rate=2)`, `scale(scale/longscale/shortscale=1)`, `tail(lower/upper/newval=0)`, `quantile(sigma=1.0)` — cùng khuôn "mỗi tham số float một stream riêng, rút bằng `FloatSampler`".
+
+**Sentiment:** 7 — "cùng `limit` nhưng khác đơn vị giữa `useStd=true/false`" là điểm reviewer sẽ hỏi; và việc `limit` cố định 0.0 thực ra là *tắt* clamp chứ không phải "clamp về 0" — dễ hiểu sai.
+
+## 2026-10-24T19:41:06Z | code-technique | score: 8
+
+**Where:** `Functions/operators.py` — `OperatorProfile`, tất cả builder methods trong `MatrixBinary` và `MatrixUnary`
+
+**Pattern:** Builders return `tuple[str, OperatorProfile]` thay vì chỉ `str`
+
+**Why:** Trước đây builders chỉ return expression string, config parameters (seed/stream/distribution) không được lưu lại → không thể replay hay audit được cách một expression được sinh ra. Giờ `OperatorProfile` chứa 3 keys: `category` (e.g. "MATRIX_BINARY"), `name` (e.g. "ts_corr"), `config` (dict chứa tất cả parameters đã sample: `seed`, `stream`, `d`, `method`, v.v.). Caller unpack `expression, profile = MatrixBinary.get(...)` — expression dùng để submit lên BRAIN API, profile dùng để ghi log/replay/debug. Tách rời expression rendering (ready-to-run FASTEXPR) khỏi metadata (reproducibility audit trail).
+
+**Reusable in:** Tất cả operator categories còn lại (`MATRIX_GENERATED`, `VARIADIC`, `SELECT`, `BOOLEAN`, `VECTOR`, `GROUP`, `GROUPING`) — cùng signature `get(...) -> tuple[str, OperatorProfile]`. Đặc biệt quan trọng cho pipeline tự động sinh alpha: mỗi alpha phải ghi lại toàn bộ config để có thể reproduce kết quả hoặc debug khi performance sụt.
+
+**Sentiment:** 8 — ảnh hưởng kiến trúc cross-cutting, reviewer sẽ hỏi tại sao không nhét `expression` vào trong `profile` (câu trả lời: expression là artifact phái sinh, không phải config; và caller thường chỉ cần expression để submit, không cần profile cho đến lúc cần audit).
+
+## 2026-10-25T03:21:00Z | code-technique | score: 9
+
+**Where:** `Functions/operators.py:695-1335` — tất cả 31 MatrixUnary builders có sampled parameters
+
+**Pattern:** Signature nhận sampled parameters như optional arguments, chỉ sample khi `param is None`
+
+**Why:** Trước đây signature chỉ nhận `x: str` và `distribution`, các parameters như `d`, `k`, `hump`, `std` được sample bên trong function → `config` lưu `{"d": 238}` nhưng không có cách nào gọi lại builder với `d=238` để tái tạo bit-exact expression. Pattern mới:
+
+```python
+def last_diff_value(x: str, d: int | None = None, *, distribution="balanced"):
+    if d is None:
+        d = IntegerSampler.sample(WINDOW_DAYS, None, WINDOW_STREAM, distribution)
+    return _profile("last_diff_value", {"d": d}, f"last_diff_value({x}, {d})")
+```
+
+Giờ caller có thể:
+1. **Random sampling:** `expr, profile = MatrixUnary.last_diff_value("field_a")` → profile chứa `{"d": 238}`
+2. **Bit-exact replay:** `expr2, _ = MatrixUnary.last_diff_value("field_a", d=238)` → `expr2 == expr`
+
+Điều này giữ nguyên 100% seed logic (không thay đổi gì về `IntegerSampler.sample` hay stream constants), chỉ thay đổi **interface** để caller có thể bypass sampling và truyền giá trị cụ thể vào.
+
+**Reusable in:** Mọi builder trong `MATRIX_GENERATED`, `VARIADIC`, `SELECT`, `BOOLEAN`, `VECTOR`, `GROUP`, `GROUPING` categories — cùng pattern: parameters đã sample phải xuất hiện trong signature như optional arguments. Đây là foundation cho:
+- **Audit trail:** lưu `config` vào database/log, replay bất cứ lúc nào.
+- **A/B testing:** so sánh hai alpha chỉ khác một parameter (e.g. `d=21` vs `d=63`).
+- **Publication-grade reproducibility:** paper appendix có thể liệt kê exact config của mọi alpha.
+
+**Sentiment:** 9 — quyết định này ảnh hưởng reproducibility của toàn bộ alpha generation pipeline. Không có pattern này thì không thể tái tạo bit-exact expression từ `config`, phá vỡ audit trail requirement của research codebase.

@@ -353,95 +353,198 @@ Sau khi login, `main.py` xử lý `/operators` **trước** catalog:
 
 ---
 
-## 8. Sinh expression từ operator: `MatrixBinary`
+## 8. Sinh expression từ operator: `MatrixBinary` và `MatrixUnary`
 
-Bảng ở §5 cho biết **operator nào** tồn tại. Class `MatrixBinary` (`Functions/operators.py`) là phần **dựng expression** từ operator đó: với mỗi operator trong bucket `MATRIX_BINARY`, nó dựng một lời gọi FASTEXPR hoàn chỉnh với hai matrix field thật, các tham số số được rút ra ngẫu nhiên.
+Bảng ở §5 cho biết **operator nào** tồn tại. Hai class `MatrixBinary` và `MatrixUnary` trong `Functions/operators.py` là phần **dựng expression** từ operator đó: với mỗi operator trong bucket tương ứng, chúng dựng một lời gọi FASTEXPR hoàn chỉnh với field thật và các tham số được rút ra ngẫu nhiên (hoặc nhận trực tiếp để reproduce).
 
-File này có **hai** class phục vụ việc dựng expression:
+File này có **ba** class phục vụ việc dựng expression:
 
 | Class | Việc |
 | --- | --- |
 | `MatrixBinary` | Dựng FASTEXPR cho 10 operator của bucket `MATRIX_BINARY` — xem §8.1–§8.3 |
-| `IntegerSampler` | Rút tham số số ngẫu nhiên (window `d`, `lag`, `rettype`) — xem §8.4–§8.5 |
+| `MatrixUnary` | Dựng FASTEXPR cho 40 operator của bucket `MATRIX_UNARY` — xem §8.6 |
+| `IntegerSampler`, `FloatSampler` | Rút tham số số ngẫu nhiên (window `d`, `lag`, `rettype`, `std`, v.v.) — xem §8.4–§8.5 |
 
-### 8.1 Profile của một lời gọi
+### 8.1 Return type: tuple `(expression, profile)`
 
-`MatrixBinary.get(name, x, y)` trả về một `OperatorProfile` — không phải chuỗi:
+Tất cả builders return **tuple** `(str, OperatorProfile)`:
 
 ```python
-{
-  'category': 'MATRIX_BINARY',
-  'name': 'ts_regression',
-  'config': {'d': 70, 'lag': 0, 'rettype': 1},
-  'inputs matrics': ['FIELD_A', 'FIELD_B'],
-  'expression': 'ts_regression(FIELD_A, FIELD_B, 70, lag = 0, rettype = 1)'
-}
+expression, profile = MatrixBinary.get("ts_corr", "field_a", "field_b")
+# expression = 'ts_corr(field_a, field_b, 114)'
+# profile = {"category": "MATRIX_BINARY", "name": "ts_corr", "config": {"d": 114}}
+```
+
+- **`expression`** (str): FASTEXPR hoàn chỉnh, ready-to-submit lên BRAIN API.
+- **`profile`** (OperatorProfile): metadata chứa `category`, `name`, và `config` — dùng để audit trail và reproduce bit-exact.
+
+**`OperatorProfile` structure:**
+
+```python
+OperatorProfile = TypedDict(
+    "OperatorProfile",
+    {
+        "category": str,
+        "name": str,
+        "config": dict[str, int | bool | float | str],
+    },
+)
 ```
 
 | Key | Kiểu | Nghĩa |
 | --- | --- | --- |
-| `category` | `str` | Bucket của operator — luôn `MATRIX_BINARY` ở class này |
+| `category` | `str` | Bucket của operator (e.g. `MATRIX_BINARY`, `MATRIX_UNARY`) |
 | `name` | `str` | Tên operator theo đúng cách platform viết |
-| `config` | `dict[str, int \| bool]` | Tham số **được rút ngẫu nhiên** (window `d`, `lag`, `rettype`) với giá trị platform thực sự nhận |
-| `inputs matrics` | `list[str]` | Các matrix field, **đúng thứ tự** platform nhận |
-| `expression` | `str` | FASTEXPR hoàn chỉnh |
+| `config` | `dict[str, int \| bool \| float \| str]` | Tất cả tham số **được rút ngẫu nhiên** hoặc **truyền vào** — đủ để reproduce bit-exact expression |
 
-### 8.2 `config` của từng operator
+Ví dụ:
 
-| Operator | `config` |
-| --- | --- |
-| `add`, `divide`, `multiply`, `power`, `signed_power`, `subtract`, `vector_neut` | `{}` |
-| `ts_corr`, `ts_covariance` | `{'d': <window>}` |
-| `ts_regression` | `{'d': <window>, 'lag': <lag>, 'rettype': <rettype>}` |
+```python
+expression, profile = MatrixBinary.ts_regression("field_a", "field_b")
+# expression = 'ts_regression(field_b, field_a, 70, lag=0, rettype=1)'
+# profile = {"category": "MATRIX_BINARY", "name": "ts_regression", "config": {"d": 70, "lag": 0, "rettype": 1}}
+```
 
-`config` chỉ chứa tham số **được rút ngẫu nhiên** — những tham số mà cùng một `(seed, stream)` phải tái lập được. Tham số cố định của operator (ví dụ `filter = true` của `add`/`multiply`/`subtract`) **không** nằm trong `config`: nó không đổi theo seed, nên không cần lưu để replay.
+### 8.2 Reproducibility: signature nhận parameters như optional arguments
 
-Lưu ý: `filter = true` nghĩa là NaN được coi là `0` (`1` với `multiply`) trước khi tính. Platform định nghĩa mặc định là `false` — giá trị `true` ở đây là **lựa chọn của class này**, không phải mặc định của platform.
+Tất cả builders hỗ trợ **hai chế độ**:
+
+**1. Random sampling (default)** — không truyền parameters:
+```python
+expr, profile = MatrixBinary.ts_corr("field_a", "field_b")
+# expr = 'ts_corr(field_a, field_b, 114)'
+# profile = {"category": "MATRIX_BINARY", "name": "ts_corr", "config": {"d": 114}}
+```
+
+**2. Bit-exact replay** — truyền parameters từ `config` để reproduce:
+```python
+expr2, _ = MatrixBinary.ts_corr("field_a", "field_b", d=114)
+# expr2 = 'ts_corr(field_a, field_b, 114)'  # giống hệt expr
+```
+
+**Pattern:** mọi parameter trong `config` xuất hiện trong signature như optional argument (`d=None`, `lag=None`, `rettype=None`). Builder chỉ sample khi parameter là `None`:
+
+```python
+def ts_corr(x: str, y: str, d: int | None = None, *, distribution="balanced"):
+    if d is None:
+        d = IntegerSampler.sample(WINDOW_DAYS, None, WINDOW_STREAM, distribution)
+    return _profile("ts_corr", {"d": d}, f"ts_corr({x}, {y}, {d})")
+```
+
+**`config` của từng operator bucket:**
+
+| Bucket | Operators | Sampled parameters |
+| --- | --- | --- |
+| `MATRIX_BINARY` | `add`, `divide`, `multiply`, `power`, `signed_power`, `subtract`, `vector_neut` | Không có (expression deterministic) |
+| | `ts_corr`, `ts_covariance` | `d` (window) |
+| | `ts_regression` | `d` (window), `lag`, `rettype` |
+| `MATRIX_UNARY` | `abs_`, `inverse`, `log`, `pasteurize`, `reverse`, `sign`, `sqrt`, `zscore`, `days_from_last_change` | Không có |
+| | 23 ts_* operators | `d` (window), một số có `mode`, `driver`, `dense`, `k` |
+| | `hump` | `hump` (float) |
+| | `kth_element` | `d`, `k` |
+| | `last_diff_value` | `d` |
+| | `normalize` | `use_std` (bool), `limit` (float) |
+| | `quantile` | `driver`, `sigma` (float) |
+| | `rank` | `rate` (float) |
+| | `scale` | `book_size`, `long_scale` (float), `short_scale` (float) |
+| | `tail` | `d`, `lower` (float), `upper` (float), `newval` (float) |
+| | `ts_target_tvr_decay`, `ts_target_tvr_hump` | `lambda_min` (float), `lambda_max` (float), `target_tvr` (float) |
+| | `winsorize` | `std` (float), `window` |
+
+`config` chỉ chứa tham số **được sample hoặc truyền vào** — đủ để tái tạo bit-exact expression. Tham số cố định của operator (ví dụ `filter=true` của `add`/`multiply`/`subtract`) **không** nằm trong `config` vì chúng không đổi.
 
 ### 8.3 Thứ tự field: `x, y` hay `y, x`
 
 Platform đặt tên tham số **không nhất quán** giữa các operator: `ts_corr(x, y, d)` nhưng `ts_covariance(y, x, d)` và `ts_regression(y, x, d, …)`.
 
-`inputs matrics` ghi theo thứ tự platform **thực sự** nhận, nên:
+Builders trong `MatrixBinary` xử lý thứ tự đúng theo platform:
 
-| Operator | `inputs matrics` |
+| Operator | Thứ tự tham số field |
 | --- | --- |
-| `ts_corr` | `[x, y]` |
-| `ts_covariance`, `ts_regression` | `[y, x]` |
+| `ts_corr` | `(x, y, d)` |
+| `ts_covariance`, `ts_regression` | `(y, x, d, ...)` |
 
 Đây là lý do class tách `get()` (dispatch theo tên) khỏi từng builder (mỗi builder biết thứ tự riêng của nó).
 
 ### 8.4 Rút tham số số: uniform và balanced
 
-Ba tham số ngẫu nhiên — `d` (window), `lag`, `rettype` — được rút từ `IntegerSampler.sample()`, mỗi tham số nằm trên một **entropy stream riêng** nên thêm tham số mới không làm đổi giá trị của tham số cũ:
+Các tham số ngẫu nhiên (`d`, `lag`, `rettype`, `std`, `hump`, v.v.) được rút từ `IntegerSampler.sample()` hoặc `FloatSampler.sample()`. Mỗi tham số nằm trên một **entropy stream riêng** nên thêm tham số mới không làm đổi giá trị của tham số cũ.
 
-| Tham số | Stream | Khoảng | Áp dụng |
-| --- | --- | --- | --- |
-| `d` | 1 | `(1, 252)` | `ts_corr`, `ts_covariance`, `ts_regression` |
-| `rettype` | 2 | `(0, 9)` | `ts_regression` |
-| `lag` | 3 | `(0, 5)` | `ts_regression` |
+**Streams trong `MatrixBinary`:**
 
-`distribution="uniform"` (mặc định của `IntegerSampler.sample`): mọi giá trị trong khoảng có xác suất bằng nhau.
+| Tham số | Stream | Khoảng | Distribution default | Áp dụng |
+| --- | --- | --- | --- | --- |
+| `d` | `WINDOW_STREAM = 1` | `WINDOW_DAYS = (1, 252)` | `"balanced"` | `ts_corr`, `ts_covariance`, `ts_regression` |
+| `rettype` | `RETTYPE_STREAM = 2` | `(0, 9)` | `"uniform"` | `ts_regression` |
+| `lag` | `LAG_STREAM = 3` | `(0, 5)` | `"uniform"` | `ts_regression` |
 
-`distribution="balanced"`: khoảng được chia thành **5 bucket theo tỉ lệ** (`5/252, 22/252, 66/252, 126/252` của kích thước khoảng), mỗi bucket được chọn với xác suất 20% rồi một giá trị bên trong bucket đó được chọn đều. Với khoảng `(1, 252)` — 252 ngày giao dịch — 5 bucket là `1-5, 6-22, 23-66, 67-126, 127-252`.
+**Distribution modes:**
 
-Bucket được chia theo **tỉ lệ** chứ không theo số ngày cố định, vì kích thước khoảng không cố định: window có thể 252 ngày, lag có thể 5. Mốc 252 chỉ là tham chiếu để **định nghĩa tỉ lệ**, không phải giả định về range.
+- **`"uniform"`**: mọi giá trị trong khoảng có xác suất bằng nhau.
+- **`"balanced"`**: khoảng được chia thành **5 quintile buckets theo tỉ lệ** `(5/252, 22/252, 66/252, 126/252)` của kích thước khoảng, mỗi bucket được chọn với xác suất 20%, rồi một giá trị bên trong bucket đó được chọn đều.
 
-Lưu ý: `distribution` chỉ áp cho **window** `d`. `lag` và `rettype` luôn uniform — chúng là *enum* (loại đầu ra, độ trễ), không phải *horizon* (độ dài), nên chia bucket theo tỉ lệ không có ý nghĩa.
+Với `WINDOW_DAYS = (1, 252)`, 5 buckets là: `1-5`, `6-22`, `23-66`, `67-126`, `127-252`.
 
-### 8.5 Bit-exact và replay
+**Convention:**
+- **Window parameters** (`d` trong time-series operators) dùng `"balanced"` — tránh sample quá nhiều window ngắn (1-5 ngày) hoặc quá dài (200+ ngày).
+- **Enum parameters** (`lag`, `rettype`, `mode`) dùng `"uniform"` — chúng là discrete choices, không phải horizons.
+- **Float parameters** (`std`, `sigma`, `rate`, `hump`, `limit`) dùng `FloatSampler` với `"uniform"` hoặc `"balanced"` tuỳ ý nghĩa parameter.
+
+Verified: tất cả `IntegerSampler.sample(WINDOW_DAYS, ...)` trong codebase đều dùng `distribution="balanced"`.
+
+### 8.5 Bit-exact và replay từ seed
 
 `IntegerSampler.sample` nhận `seed` và `stream`; `(seed, stream, value_range, distribution)` cố định ⇒ ra **cùng một số**, bit-exact. `seed=None` lấy entropy mới từ CSPRNG của OS mỗi lần gọi.
 
-Trong `main.py`, các operator `ts_*` được gọi **không truyền `seed`**, nên mỗi operator rút window riêng từ entropy mới của OS — `ts_corr`, `ts_covariance` và `ts_regression` có thể ra ba window khác nhau. Khi muốn hai operator được so sánh trên **cùng một cửa sổ**, phải truyền **chung một `seed`**:
-
+**Replay từ config (recommended):**
 ```python
-MatrixBinary.ts_corr(x, y, seed=42)        # d = 114
-MatrixBinary.ts_covariance(x, y, seed=42)  # d = 114
-MatrixBinary.ts_regression(x, y, seed=42)  # d = 114
+# Lần 1: sample random
+expr, profile = MatrixBinary.ts_regression("field_a", "field_b")
+# profile = {"category": "MATRIX_BINARY", "name": "ts_regression", "config": {"d": 70, "lag": 2, "rettype": 1}}
+
+# Lần 2: replay bit-exact từ config
+expr2, _ = MatrixBinary.ts_regression("field_a", "field_b", d=70, lag=2, rettype=1)
+# expr2 == expr (bit-exact)
 ```
 
-Lưu ý: `MatrixBinary.get(name, x, y)` **không** có tham số `seed` — nó chỉ nhận `distribution`. Muốn cố định window qua `get()`, phải sửa thêm tham số `seed` vào `get()`; hiện tại đường đó chưa có.
+**Replay từ seed (legacy, ít dùng):**
+```python
+# Khi muốn nhiều operators dùng chung một window
+expr1, _ = MatrixBinary.ts_corr("a", "b", seed=42)        # d=114
+expr2, _ = MatrixBinary.ts_covariance("a", "b", seed=42)  # d=114
+expr3, _ = MatrixBinary.ts_regression("a", "b", seed=42)  # d=114, lag=3, rettype=7
+```
+
+Lưu ý: `seed` replay chỉ cố định được **stream 1** (window `d`) — các streams khác (`lag`, `rettype`) vẫn random. Để cố định tất cả, phải truyền tất cả parameters vào signature.
+
+### 8.6 `MatrixUnary` — 40 operators nhận 1 field
+
+Class `MatrixUnary` xử lý bucket `MATRIX_UNARY` (40 operators). Pattern giống hệt `MatrixBinary`:
+
+**Signature:**
+```python
+MatrixUnary.get(name: str, x: str, *, distribution: Literal["uniform", "balanced"] = "uniform") -> tuple[str, OperatorProfile]
+```
+
+**Example:**
+```python
+# Random sampling
+expr, profile = MatrixUnary.ts_mean("close")
+# expr = 'ts_mean(close, 96)'
+# profile = {"category": "MATRIX_UNARY", "name": "ts_mean", "config": {"d": 96}}
+
+# Bit-exact replay
+expr2, _ = MatrixUnary.ts_mean("close", d=96)
+# expr2 == expr
+```
+
+**31 operators có sampled parameters**, ví dụ:
+- `ts_mean(x, d)` — signature: `ts_mean(x: str, d: int | None = None, *, distribution="balanced")`
+- `normalize(x, useStd, limit)` — signature: `normalize(x: str, use_std: bool | None = None, limit: float | None = None, *, distribution="uniform")`
+- `scale(x, bookSize, longscale, shortscale)` — signature: `scale(x: str, book_size: int | None = None, long_scale: float | None = None, short_scale: float | None = None, *, distribution="uniform")`
+
+**9 operators không có parameters** (deterministic):
+`abs_`, `days_from_last_change`, `inverse`, `log`, `pasteurize`, `reverse`, `sign`, `sqrt`, `zscore`
 
 ---
 
@@ -453,7 +556,4 @@ Lưu ý: `MatrixBinary.get(name, x, y)` **không** có tham số `seed` — nó 
 | Definition của operator so sánh (`equal`, `less`, …) là **không có ngoặc** | `OperatorTable.arg_names()` trả về rỗng → chúng không thể là SELECT. Đúng như mong muốn (chúng là BOOLEAN), nhưng là hệ quả chứ không phải thiết kế. |
 | Bảng không còn hiệu lực khi platform đổi operator | Không có timestamp. Xoá `cache/operators.csv` để fetch lại. |
 | `COMBO` và `SELECTION` scope chưa được phân loại | Tài liệu này chỉ phủ `REGULAR`. |
-| Chỉ bucket `MATRIX_BINARY` có phần dựng expression | `MatrixBinary` phủ 10 operator. 74 operator còn lại (`MATRIX_UNARY`, `VECTOR`, `GROUP`, …) mới chỉ có **bảng**, chưa có builder — sinh expression tự động cho chúng là việc tiếp theo. |
-| `MatrixBinary` chỉ nhận **hai** matrix field | Không xử lý operator nhận 1 field (`MATRIX_UNARY`, 40 operator), nhiều field không cố định (`VARIADIC`) hay field + group (`GROUP`). `get()` dispatch trên tên, nên bucket mới cần một class riêng. |
-| `distribution` mặc định **không nhất quán** giữa các tầng | `IntegerSampler.sample` và `MatrixBinary.get` mặc định `"uniform"`, còn `ts_corr` / `ts_covariance` / `ts_regression` mặc định `"balanced"`. Ba hàm `ts_*` được gọi trực tiếp (không qua `get`) nên ra window theo balanced, còn qua `get()` thì ra uniform. Sửa cần một quyết định chung, không phải sửa lẻ từng dòng. |
-| Key `inputs matrics` có khoảng trắng | Bắt buộc dùng **functional syntax** của `TypedDict` — class syntax không biểu diễn được key có space. Đổi tên key thành `inputs_matrices` sẽ gọn hơn nhưng lệch với thuật ngữ trong yêu cầu gốc. |
+| 6 buckets chưa có builder | `MATRIX_GENERATED`, `VARIADIC`, `SELECT`, `BOOLEAN`, `VECTOR`, `GROUP`, `GROUPING` — sinh expression tự động cho chúng là việc tiếp theo. |
