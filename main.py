@@ -1,9 +1,9 @@
 import sys
 
-from Functions.cache import CATALOG_MAX_AGE_SECONDS, FIELD_TYPES
+from Functions.cache import CATALOG_MAX_AGE_SECONDS
 from Functions.data import BrainData, CatalogBuilder
 from Functions.login import RELOGIN_THRESHOLD_SECONDS, BrainLogin
-from Functions.operators import OPERATORS_CSV_PATH, OperatorTable
+from Functions.operators import OPERATORS_CSV_PATH, MatrixBinary, OperatorTable
 
 
 def main():
@@ -103,18 +103,39 @@ def main():
             f"Cache ({len(builder.scopes)} scopes, {CATALOG_MAX_AGE_SECONDS / 86400:.0f}d max age): "
             f"{key} {state} {abs(left):.0f}s ({abs(left) / 86400:.2f} d)"
         )
-
+    # Expression builder examples: two real MATRIX field ids from one cached
+    # scope, run through every builder so the printed FASTEXPR is exactly what
+    # the platform would receive. The snapshot id is printed because
+    # frame_id + scope is what pins the two field ids to one catalog snapshot.
     scope = builder.scopes[-1]
-    # A fresh seed per run keeps the draw from being anchored to a fixed
-    # constant, and printing it with the snapshot id keeps the run reproducible:
-    # seed + frame_id + scope replays this exact sample.
-    for field_type in FIELD_TYPES:
-        sample = builder.sample_field_ids(
-            scope["region"], scope["delay"], scope["universe"], field_type, 2
-        )
-        print(
-            f"{field_type}: {sample}\n"
-        )
+    x, y = builder.sample_field_ids(
+        scope["region"], scope["delay"], scope["universe"], "MATRIX", 2
+    )
+    # The window is left to each operator to draw: d=None makes it pick from
+    # (WINDOW_DAYS_MIN, WINDOW_DAYS_MAX). No seed is passed, so each operator
+    # draws its own window from fresh OS entropy — to compare two operators over
+    # the same window, call the builders directly with a shared seed.
+    snapshot = builder.cache.open(scope, "MATRIX")
+    frame = snapshot.frame_id
+    snapshot.close()
+    print(f"\nExpression examples [{builder.cache.key(scope)}, frame {frame}")
+    # The ts_* operators take the window as their third argument, and the
+    # platform's argument order differs per operator (ts_corr is x, y while
+    # ts_covariance and ts_regression are y, x), so each call is written out.
+    for name in (
+        "add",
+        "divide",
+        "multiply",
+        "power",
+        "signed_power",
+        "subtract",
+        "ts_corr",
+        "ts_covariance",
+        "ts_regression",
+        "vector_neut",
+    ):
+        profile = MatrixBinary.get(name, x, y)
+        print(f"  {name:14s} {profile['expression']}")
 
 
 if __name__ == "__main__":

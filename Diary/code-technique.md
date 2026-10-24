@@ -376,3 +376,47 @@ Một quyết định khác đáng ghi: chỉ in scope **hết hạn sớm nhấ
 **Reusable in:** mọi thay đổi có thể tác động tới bảng sinh ra — cache CSV, parquet, snapshot archive. Chụp baseline trước khi sửa, `cmp` sau.
 
 **Sentiment:** 6 — kỹ thuật quen thuộc nhưng dễ bỏ qua; ở đây nó là thứ duy nhất chứng minh việc đổi tên không đổi dữ liệu.
+
+## 2026-10-24T07:13:11Z | code-technique | score: 7
+
+**Where:** `Functions/operators.py` — `_balanced_buckets()`, `sample_int()`, `class MatrixBinary`
+
+**Pattern:** Chia một khoảng số nguyên thành N bucket **theo tỉ lệ**, không theo số tuyệt đối: `_BUCKET_FRACTIONS = (5/252, 22/252, 66/252, 126/252)` × `count = max - min + 1`, rồi mỗi bucket được chọn **đều** (20% mỗi bucket) và một giá trị bên trong bucket được chọn đều.
+
+**Why:** Khoảng lấy mẫu trong codebase này **không cố định** — window là `(1, 252)`, lag là `(0, 5)`. Bản đầu dùng `_REFERENCE_RANGE_SIZE = 252` + `_REFERENCE_CUTS = (5, 22, 66, 126)` rồi scale `round(count * cut / 252)`: nhìn có vẻ động nhưng vẫn **hard-code 252**, và cắt sai ở range không cùng tham chiếu. Chuyển sang tỉ lệ làm 252 thành **tham chiếu định nghĩa tỉ lệ** chứ không phải giả định về range: `(0, 100)` → `0-1, 2-8, 9-25, 26-49, 50-100` (đúng 1.98/8.73/17.46/23.81/48.02%) thay vì cắt theo ngày.
+
+Kỹ thuật quan trọng đi kèm: **clamp cut để mọi bucket có ít nhất một số nguyên**. `cuts.append(max(cuts[-1] + 1, min(scaled_cut, count - (BUCKET_COUNT - index))))` — nếu không clamp, một khoảng lệch tỉ lệ có thể tạo bucket rỗng, và `rng.integers(low, high+1)` với `low > high` sẽ raise. Bucket rỗng cũng làm mất tính chất "mỗi bucket 20%".
+
+**Reusable in:** mọi bài "chia khoảng thành bucket có xác suất bằng nhau" — sampling horizon, bucketing feature, stratified draw. Cùng pattern cho `bin_edges` khi cần dùng lại nhưng không phải uniform trong bucket.
+
+**Sentiment:** 7 — reviewer sẽ hỏi "tại sao không dùng `_REFERENCE_CUTS` scale theo 252?", và câu trả lời (252 là tham chiếu định nghĩa tỉ lệ, không phải giả định về range) là điều đáng giữ; kỹ thuật clamp cut chống bucket rỗng là thứ chỉ lộ ra khi range lệch tỉ lệ.
+
+## 2026-10-24T07:13:11Z.1 | code-technique | score: 7
+
+**Where:** `Functions/operators.py` — `OperatorProfile`, `MatrixBinary._profile()`
+
+**Pattern:** Builder trả về **profile dict có kiểu** thay vì trả chuỗi: `category` + `name` + `config` (tham số **được rút ngẫu nhiên**, kèm giá trị platform thực sự nhận) + `inputs matrics` (field theo đúng thứ tự platform) + `expression` (FASTEXPR cuối). `TypedDict` dùng **functional syntax** vì key `'inputs matrics'` có khoảng trắng — class syntax của `TypedDict` không biểu diễn được key có space (đã verify: `SyntaxError` trên Python 3.14).
+
+**Why:** Chuỗi FASTEXPR là **sink** — không parse được ngược, không biết field nào là input, không biết tham số nào được rút ngẫu nhiên. Bước sinh alpha sau này cần đúng ba thứ: danh sách field để chọn, giá trị tham số để replay, và chuỗi để gửi. Profile giữ cả ba trong một object, và `config` tách **tham số đã rút** khỏi **expression** đã render — nên replay chỉ cần `(seed, stream)` chứ không cần parse lại chuỗi.
+
+Ranh giới của `config` là **tham số biến theo seed**, không phải "mọi tham số không phải matrix field": tham số cố định của operator (ví dụ `filter = true` của `add`/`multiply`/`subtract`) **không** nằm trong `config` — nó không đổi theo seed nên không cần lưu để replay. Đưa cả nó vào `config` sẽ làm profile phải chứa dữ liệu tĩnh, tức là dữ liệu mà đọc ra từ `expression` là biết.
+
+Điểm dễ sai: thứ tự field. Platform đặt tên tham số **không nhất quán** — `ts_corr(x, y, d)` nhưng `ts_covariance(y, x, d)` và `ts_regression(y, x, d, …)`. Nên `inputs matrics` ghi theo thứ tự platform **thực sự nhận** (`ts_corr` → `[x, y]`, `ts_covariance`/`ts_regression` → `[y, x]`), và mỗi builder tự biết thứ tự riêng thay vì `get()` áp một quy tắc chung.
+
+**Reusable in:** mọi bước sinh expression cho bucket còn lại (`MATRIX_UNARY` 40 operator, `VECTOR` 7, `GROUP` 9) — mỗi bucket một class, cùng kiểu `OperatorProfile`, thêm `category` riêng.
+
+**Sentiment:** 7 — ranh giới "config chỉ chứa tham số biến theo seed" là điều reviewer sẽ hỏi khi thấy `filter` không nằm trong `config`; trả lời bằng lập luận replay là điều đáng giữ.
+
+## 2026-10-24T07:23:07Z | code-technique | score: 7
+
+**Where:** `Functions/operators.py` — `class IntegerSampler` (`buckets()`, `sample()`)
+
+**Pattern:** Gom hằng số + hàm module-level thành class dùng `classmethod` khi hàm **đọc hằng số của chính class**: `BUCKET_FRACTIONS` / `BUCKET_COUNT` là hằng số class, `buckets()` và `sample()` là `classmethod` vì `buckets()` cần `cls.BUCKET_FRACTIONS` để cắt bucket.
+
+**Why:** `staticmethod` sẽ buộc viết `IntegerSampler.BUCKET_FRACTIONS` thủ công ở mọi chỗ dùng — mỗi lần gõ tên class là một cơ hội để lệch. Với `classmethod`, `cls.BUCKET_FRACTIONS` là **một nguồn sự thật duy nhất**, và subclass đổi hằng số thì mọi method tự động theo. Đây là cùng nguyên tắc đã dùng cho `OperatorTable.arg_names()` / `bucket_of()`: quy tắc thuần tuý → `staticmethod`; quy tắc đọc hằng số class → `classmethod`.
+
+Tên method cũng đổi theo: `_balanced_buckets()` → `buckets()`. Tiền tố `_balanced_` chỉ có tác dụng phân biệt với hàm module-level; bên trong class, "balanced" đã là ngữ nghĩa mặc định của `distribution="balanced"`, nhắc lại là thừa.
+
+**Reusable in:** mọi cặp "hằng số + hàm dùng hằng số" — bảng tham số + hàm tra cứu, danh sách bucket + hàm chia bucket, từ điển + hàm build. Khi đó dùng `classmethod` chứ không phải module-level constant + `staticmethod`.
+
+**Sentiment:** 7 — reviewer sẽ hỏi "vì sao `classmethod` chứ không phải `staticmethod`?", và câu trả lời (một nguồn sự thật cho hằng số bucket) là điều đáng giữ; verify bit-exact 240/240 trên bản refactor là thứ chứng minh việc đổi cấu trúc không đổi số.

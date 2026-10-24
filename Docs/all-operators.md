@@ -27,6 +27,8 @@ Một operator publish thuộc nhiều scope: sau `explode("scope")` có **212 d
 
 **Điểm vận hành:** `/operators` cần auth, nên tốn login. Bảng được cache thành **một file CSV duy nhất** ở `cache/operators.csv`; từ lần chạy thứ hai trở đi, file còn trên đĩa là không cần gọi platform nữa. Luồng xử lý 3 nhánh trong `main.py` xem §7.2.
 
+Tài liệu này gồm hai phần: **§1–§7** mô tả bảng phân loại 84 operator (sinh từ `/operators`), còn **§8** mô tả phần dựng FASTEXPR từ operator đó (`MatrixBinary` + `IntegerSampler`).
+
 ---
 
 ## 2. Vì sao phải tự phân loại
@@ -42,7 +44,7 @@ Trong đó `category` là do platform grade (Arithmetic, Time Series, Logical, G
 Hai điều suy ra được từ `category` là sai với mục đích dựng alpha:
 
 - `if_else` được grade là `Logical`, nhưng nó là **value selector** (chọn giữa hai giá trị), không phải mask 0/1 → không thuộc nhóm BOOLEAN.
-- `max` / `min` / `multiply` nằm trong `Arithmetic`, nhưng chúng nhận **số lượng field không cố định** → không phải unary/binary thông thường.
+- `max` / `min` nằm trong `Arithmetic`, nhưng chúng nhận **số lượng field không cố định** → không phải unary/binary thông thường.
 
 Vì vậy bảng dưới đây dùng **9 bucket riêng**, tách bạch khỏi `category` của platform.
 
@@ -54,10 +56,10 @@ Các bucket đi theo **chiều data flow** mà một FASTEXPR đi qua. Thứ t�
 
 | Bucket | Ý nghĩa | Số |
 | --- | --- | --- |
-| `MATRIX_BINARY` | Nhận đúng **hai** matrix field → nơi hai field độc lập gặp nhau, biểu đạt được quan hệ pairwise | 9 |
+| `MATRIX_BINARY` | Nhận đúng **hai** matrix field → nơi hai field độc lập gặp nhau, biểu đạt được quan hệ pairwise | 10 |
 | `MATRIX_UNARY` | Nhận **một** matrix field | 40 |
 | `MATRIX_GENERATED` | Không nhận matrix field nào — tự sinh ra chuỗi đếm ngày (`ts_step`) | 1 |
-| `VARIADIC` | Nhận số lượng matrix field **không cố định** | 3 |
+| `VARIADIC` | Nhận số lượng matrix field **không cố định** | 2 |
 | `SELECT` | Nhận matrix field, trong đó một field đóng vai trò **điều kiện** chứ không phải giá trị | 2 |
 | `BOOLEAN` | Trả về **mask 0/1** thay vì giá trị | 10 |
 | `VECTOR` | Tiêu thụ vector field và **giảm về matrix** | 7 |
@@ -75,7 +77,7 @@ Bốn luật đọc được trực tiếp từ payload:
 | VECTOR | tên bắt đầu bằng `vec_` |
 | GROUP | tên bắt đầu bằng `group_` **và** definition có nhắc tới `group` |
 | BOOLEAN | `category == "Logical"` |
-| VARIADIC | definition chứa `..` |
+| VARIADIC | definition chứa `..` **nhưng không** chứa `...` |
 
 Ba luật còn lại **không** đọc được từ payload, phải suy ra riêng:
 
@@ -91,7 +93,15 @@ Hai operator này được xếp vào `GROUPING` vì typing của chúng chỉ �
 
 Một operator là SELECT khi **tất cả** argument của nó đều là data field, và có **từ 3 trở lên**.
 
-Điểm dễ hiểu sai: platform dùng **hai** ký hiệu variadic khác nhau — `..` (hai chấm) và `...` (ba chấm). `multiply(x ,y, ... , filter=false), x * y` dùng ba chấm, nên luật "chứa `..`" mới bắt được `multiply` — vì `...` cũng chứa substring `..`.
+Điểm dễ hiểu sai: platform dùng **hai** ký hiệu variadic khác nhau — `..` (hai chấm) và `...` (ba chấm). Luật VARIADIC chỉ bắt `..`, nên `multiply` — vốn dùng ba chấm — **không** rơi vào VARIADIC.
+
+| Operator | Definition | Ký hiệu | Bucket |
+| --- | --- | --- | --- |
+| `max` | `max(x, y, ..)` | `..` hai chấm | VARIADIC |
+| `min` | `min(x, y ..)` | `..` hai chấm | VARIADIC |
+| `multiply` | `multiply(x ,y, ... , filter=false), x * y` | `...` ba chấm | MATRIX_BINARY |
+
+`multiply` nhận hai matrix field (`x`, `y`) nên được đếm như `add` và `subtract`: đây là điểm nhất quán giữa **hình thức** (ký hiệu platform dùng) và **typing** (số field thực sự tiêu thụ).
 
 | Operator | Definition | Vì sao |
 | --- | --- | --- |
@@ -111,7 +121,7 @@ GROUPING → GROUP → VECTOR → BOOLEAN → SELECT → VARIADIC → MATRIX_GEN
 Hai chỗ thứ tự **có ý nghĩa**, đảo là sai:
 
 - **SELECT trước BOOLEAN.** `if_else` là `Logical` (sẽ vào BOOLEAN nếu không loại) nhưng là value selector. Xếp SELECT trước thì `if_else` ra khỏi BOOLEAN, đúng như bảng.
-- **VARIADIC trước MATRIX_*.** `max` / `min` / `multiply` có 2 argument data field (`x`, `y`) nên nếu đến bước MATRIX sẽ bị đếm là binary — sai, chúng nhận bao nhiêu field tuỳ ý.
+- **VARIADIC trước MATRIX_*.** `max` / `min` có 2 argument data field (`x`, `y`) nên nếu đến bước MATRIX sẽ bị đếm là binary — sai, chúng nhận bao nhiêu field tuỳ ý. `multiply` không dính luật này vì nó dùng ký hiệu ba chấm, nên nó đi xuống bước MATRIX và ra MATRIX_BINARY.
 
 ### 4.5 Đếm matrix field — chỉ đếm argument data field
 
@@ -147,12 +157,13 @@ Cả hai đều **tăng 1 mỗi ngày** — argument chỉ dịch toàn bộ chu
 
 Cột **Platform category** là `category` do platform grade. Cột **Level** là `level` của platform: `ALL` nghĩa là operator dùng được ở mọi cấp độ; `-` nghĩa là payload trả `null` — platform **chưa grade** operator đó (18/84 operator, không phải dữ liệu thiếu).
 
-### MATRIX_BINARY (9)
+### MATRIX_BINARY (10)
 
 | Operator | Expression | Platform category | Level |
 | --- | --- | --- | --- |
 | `add` | `add(x, y, filter = false), x + y` | Arithmetic | ALL |
 | `divide` | `divide(x, y), x / y` | Arithmetic | ALL |
+| `multiply` | `multiply(x ,y, ... , filter=false), x * y` | Arithmetic | ALL |
 | `power` | `power(x, y)` | Arithmetic | ALL |
 | `signed_power` | `signed_power(x, y)` | Arithmetic | ALL |
 | `subtract` | `subtract(x, y, filter=false), x - y` | Arithmetic | ALL |
@@ -212,13 +223,12 @@ Cột **Platform category** là `category` do platform grade. Cột **Level** l�
 | --- | --- | --- | --- |
 | `ts_step` | `ts_step(1)` | Time Series | ALL |
 
-### VARIADIC (3)
+### VARIADIC (2)
 
 | Operator | Expression | Platform category | Level |
 | --- | --- | --- | --- |
 | `max` | `max(x, y, ..)` | Arithmetic | ALL |
 | `min` | `min(x, y ..)` | Arithmetic | ALL |
-| `multiply` | `multiply(x ,y, ... , filter=false), x * y` | Arithmetic | ALL |
 
 ### SELECT (2)
 
@@ -283,7 +293,7 @@ Cột **Platform category** là `category` do platform grade. Cột **Level** l�
 | Platform category | n | Bucket phân bố |
 | --- | --- | --- |
 | Time Series | 30 | MATRIX_UNARY 26 · MATRIX_BINARY 3 · MATRIX_GENERATED 1 |
-| Arithmetic | 16 | MATRIX_UNARY 7 · MATRIX_BINARY 5 · VARIADIC 3 · GROUPING 1 (`densify`) |
+| Arithmetic | 16 | MATRIX_UNARY 7 · MATRIX_BINARY 6 · VARIADIC 2 · GROUPING 1 (`densify`) |
 | Logical | 11 | BOOLEAN 10 · SELECT 1 (`if_else`) |
 | Group | 10 | GROUP 9 · GROUPING 1 (`group_cartesian_product`) |
 | Cross Sectional | 7 | MATRIX_UNARY 6 · MATRIX_BINARY 1 (`vector_neut`) |
@@ -329,6 +339,8 @@ Toàn bộ logic nằm trong class `OperatorTable` (`Functions/operators.py`):
 
 `arg_names` và `bucket_of` là `staticmethod` vì chúng là quy tắc thuần tuý — không phụ thuộc session hay đường dẫn. `load` cũng vậy: đọc từ đĩa không cần session.
 
+Phần **dựng expression** nằm ở class khác trong cùng file: `MatrixBinary` (bucket `MATRIX_BINARY`) — xem §8.
+
 ### 7.2 Thứ tự xử lý trong `main.py`
 
 Sau khi login, `main.py` xử lý `/operators` **trước** catalog:
@@ -341,7 +353,99 @@ Sau khi login, `main.py` xử lý `/operators` **trước** catalog:
 
 ---
 
-## 8. Giới hạn đã biết
+## 8. Sinh expression từ operator: `MatrixBinary`
+
+Bảng ở §5 cho biết **operator nào** tồn tại. Class `MatrixBinary` (`Functions/operators.py`) là phần **dựng expression** từ operator đó: với mỗi operator trong bucket `MATRIX_BINARY`, nó dựng một lời gọi FASTEXPR hoàn chỉnh với hai matrix field thật, các tham số số được rút ra ngẫu nhiên.
+
+File này có **hai** class phục vụ việc dựng expression:
+
+| Class | Việc |
+| --- | --- |
+| `MatrixBinary` | Dựng FASTEXPR cho 10 operator của bucket `MATRIX_BINARY` — xem §8.1–§8.3 |
+| `IntegerSampler` | Rút tham số số ngẫu nhiên (window `d`, `lag`, `rettype`) — xem §8.4–§8.5 |
+
+### 8.1 Profile của một lời gọi
+
+`MatrixBinary.get(name, x, y)` trả về một `OperatorProfile` — không phải chuỗi:
+
+```python
+{
+  'category': 'MATRIX_BINARY',
+  'name': 'ts_regression',
+  'config': {'d': 70, 'lag': 0, 'rettype': 1},
+  'inputs matrics': ['FIELD_A', 'FIELD_B'],
+  'expression': 'ts_regression(FIELD_A, FIELD_B, 70, lag = 0, rettype = 1)'
+}
+```
+
+| Key | Kiểu | Nghĩa |
+| --- | --- | --- |
+| `category` | `str` | Bucket của operator — luôn `MATRIX_BINARY` ở class này |
+| `name` | `str` | Tên operator theo đúng cách platform viết |
+| `config` | `dict[str, int \| bool]` | Tham số **được rút ngẫu nhiên** (window `d`, `lag`, `rettype`) với giá trị platform thực sự nhận |
+| `inputs matrics` | `list[str]` | Các matrix field, **đúng thứ tự** platform nhận |
+| `expression` | `str` | FASTEXPR hoàn chỉnh |
+
+### 8.2 `config` của từng operator
+
+| Operator | `config` |
+| --- | --- |
+| `add`, `divide`, `multiply`, `power`, `signed_power`, `subtract`, `vector_neut` | `{}` |
+| `ts_corr`, `ts_covariance` | `{'d': <window>}` |
+| `ts_regression` | `{'d': <window>, 'lag': <lag>, 'rettype': <rettype>}` |
+
+`config` chỉ chứa tham số **được rút ngẫu nhiên** — những tham số mà cùng một `(seed, stream)` phải tái lập được. Tham số cố định của operator (ví dụ `filter = true` của `add`/`multiply`/`subtract`) **không** nằm trong `config`: nó không đổi theo seed, nên không cần lưu để replay.
+
+Lưu ý: `filter = true` nghĩa là NaN được coi là `0` (`1` với `multiply`) trước khi tính. Platform định nghĩa mặc định là `false` — giá trị `true` ở đây là **lựa chọn của class này**, không phải mặc định của platform.
+
+### 8.3 Thứ tự field: `x, y` hay `y, x`
+
+Platform đặt tên tham số **không nhất quán** giữa các operator: `ts_corr(x, y, d)` nhưng `ts_covariance(y, x, d)` và `ts_regression(y, x, d, …)`.
+
+`inputs matrics` ghi theo thứ tự platform **thực sự** nhận, nên:
+
+| Operator | `inputs matrics` |
+| --- | --- |
+| `ts_corr` | `[x, y]` |
+| `ts_covariance`, `ts_regression` | `[y, x]` |
+
+Đây là lý do class tách `get()` (dispatch theo tên) khỏi từng builder (mỗi builder biết thứ tự riêng của nó).
+
+### 8.4 Rút tham số số: uniform và balanced
+
+Ba tham số ngẫu nhiên — `d` (window), `lag`, `rettype` — được rút từ `IntegerSampler.sample()`, mỗi tham số nằm trên một **entropy stream riêng** nên thêm tham số mới không làm đổi giá trị của tham số cũ:
+
+| Tham số | Stream | Khoảng | Áp dụng |
+| --- | --- | --- | --- |
+| `d` | 1 | `(1, 252)` | `ts_corr`, `ts_covariance`, `ts_regression` |
+| `rettype` | 2 | `(0, 9)` | `ts_regression` |
+| `lag` | 3 | `(0, 5)` | `ts_regression` |
+
+`distribution="uniform"` (mặc định của `IntegerSampler.sample`): mọi giá trị trong khoảng có xác suất bằng nhau.
+
+`distribution="balanced"`: khoảng được chia thành **5 bucket theo tỉ lệ** (`5/252, 22/252, 66/252, 126/252` của kích thước khoảng), mỗi bucket được chọn với xác suất 20% rồi một giá trị bên trong bucket đó được chọn đều. Với khoảng `(1, 252)` — 252 ngày giao dịch — 5 bucket là `1-5, 6-22, 23-66, 67-126, 127-252`.
+
+Bucket được chia theo **tỉ lệ** chứ không theo số ngày cố định, vì kích thước khoảng không cố định: window có thể 252 ngày, lag có thể 5. Mốc 252 chỉ là tham chiếu để **định nghĩa tỉ lệ**, không phải giả định về range.
+
+Lưu ý: `distribution` chỉ áp cho **window** `d`. `lag` và `rettype` luôn uniform — chúng là *enum* (loại đầu ra, độ trễ), không phải *horizon* (độ dài), nên chia bucket theo tỉ lệ không có ý nghĩa.
+
+### 8.5 Bit-exact và replay
+
+`IntegerSampler.sample` nhận `seed` và `stream`; `(seed, stream, value_range, distribution)` cố định ⇒ ra **cùng một số**, bit-exact. `seed=None` lấy entropy mới từ CSPRNG của OS mỗi lần gọi.
+
+Trong `main.py`, các operator `ts_*` được gọi **không truyền `seed`**, nên mỗi operator rút window riêng từ entropy mới của OS — `ts_corr`, `ts_covariance` và `ts_regression` có thể ra ba window khác nhau. Khi muốn hai operator được so sánh trên **cùng một cửa sổ**, phải truyền **chung một `seed`**:
+
+```python
+MatrixBinary.ts_corr(x, y, seed=42)        # d = 114
+MatrixBinary.ts_covariance(x, y, seed=42)  # d = 114
+MatrixBinary.ts_regression(x, y, seed=42)  # d = 114
+```
+
+Lưu ý: `MatrixBinary.get(name, x, y)` **không** có tham số `seed` — nó chỉ nhận `distribution`. Muốn cố định window qua `get()`, phải sửa thêm tham số `seed` vào `get()`; hiện tại đường đó chưa có.
+
+---
+
+## 9. Giới hạn đã biết
 
 | Vấn đề | Trạng thái |
 | --- | --- |
@@ -349,3 +453,7 @@ Sau khi login, `main.py` xử lý `/operators` **trước** catalog:
 | Definition của operator so sánh (`equal`, `less`, …) là **không có ngoặc** | `OperatorTable.arg_names()` trả về rỗng → chúng không thể là SELECT. Đúng như mong muốn (chúng là BOOLEAN), nhưng là hệ quả chứ không phải thiết kế. |
 | Bảng không còn hiệu lực khi platform đổi operator | Không có timestamp. Xoá `cache/operators.csv` để fetch lại. |
 | `COMBO` và `SELECTION` scope chưa được phân loại | Tài liệu này chỉ phủ `REGULAR`. |
+| Chỉ bucket `MATRIX_BINARY` có phần dựng expression | `MatrixBinary` phủ 10 operator. 74 operator còn lại (`MATRIX_UNARY`, `VECTOR`, `GROUP`, …) mới chỉ có **bảng**, chưa có builder — sinh expression tự động cho chúng là việc tiếp theo. |
+| `MatrixBinary` chỉ nhận **hai** matrix field | Không xử lý operator nhận 1 field (`MATRIX_UNARY`, 40 operator), nhiều field không cố định (`VARIADIC`) hay field + group (`GROUP`). `get()` dispatch trên tên, nên bucket mới cần một class riêng. |
+| `distribution` mặc định **không nhất quán** giữa các tầng | `IntegerSampler.sample` và `MatrixBinary.get` mặc định `"uniform"`, còn `ts_corr` / `ts_covariance` / `ts_regression` mặc định `"balanced"`. Ba hàm `ts_*` được gọi trực tiếp (không qua `get`) nên ra window theo balanced, còn qua `get()` thì ra uniform. Sửa cần một quyết định chung, không phải sửa lẻ từng dòng. |
+| Key `inputs matrics` có khoảng trắng | Bắt buộc dùng **functional syntax** của `TypedDict` — class syntax không biểu diễn được key có space. Đổi tên key thành `inputs_matrices` sẽ gọn hơn nhưng lệch với thuật ngữ trong yêu cầu gốc. |

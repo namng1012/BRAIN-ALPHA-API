@@ -244,3 +244,23 @@ Nói cách khác: **`EUR` + `USA` chiếm 22/41 = 53.7 % draw nhưng chỉ 4/16 
 **Impact on reported results:** Không đổi con số nào, không đổi phân loại của operator nào (CSV regenerate ra **byte-identical**, md5 `85b986a9...`). Nhưng tên bucket xuất hiện trong tài liệu (`Docs/all-operators.md`), trong cột `category` của CSV và trong entry diary cũ — nếu để sai, người đọc tài liệu sẽ hiểu `ts_step` trả về hằng số, tức là không dùng được làm trục thời gian cho `ts_regression`.
 
 **Sentiment:** 7 — tên bucket là thứ reviewer đọc đầu tiên khi tra cứu operator; một tên sai về ngữ nghĩa là lỗi tài liệu, không chỉ là lỗi thẩm mỹ.
+
+## 2026-10-24T07:13:11Z | methodology | score: 8
+
+**Decision:** Rút tham số ngẫu nhiên của FASTEXPR theo **hai phân phối**: `uniform` (mặc định của `sample_int`) và `balanced` (chia 5 bucket theo tỉ lệ, mỗi bucket 20%). Phân phối `balanced` chỉ áp cho **window `d`**; `lag` và `rettype` luôn uniform.
+
+**Alternatives considered:**
+- Chỉ giữ `uniform` — đơn giản, nhưng 252 giá trị window có xác suất đều khiến **97.6% lần rút rơi vào 3 bucket đầu** (`d ≤ 66`). Các window dài (`d > 126`, tức 50% năm giao dịch) chỉ chiếm 0.4% mẫu → gần như không được thử.
+- Chia bucket theo **số ngày cố định** (`_REFERENCE_CUTS = (5, 22, 66, 126)` scale theo 252) — vẫn hard-code 252, sai khi range không phải 252 ngày.
+- Chia **nhiều hơn 5 bucket** (ví dụ 10) — tăng độ phân giải nhưng mỗi bucket càng nhỏ, xác suất rơi vào bucket ngắn vẫn phải bù cho độ dài bucket lớn; 5 là số đủ để phủ 5 vùng horizon mà một rolling window hay được dùng (1 tuần, 1 tháng, 1 quý, nửa năm, 1 năm).
+- Áp `balanced` cho `lag` và `rettype` — **không có nghĩa**: `lag` (độ trễ) và `rettype` (loại đầu ra: residual, beta, alpha…) là *enum*, không phải *horizon*. Chia bucket theo tỉ lệ trên tập enum là vô nghĩa, và tạo ra phân phối lệch trong khi không có lý do thống kê.
+
+**Rationale:** Mốc 252 là **năm giao dịch**, và 5 bucket `1-5, 6-22, 23-66, 67-126, 127-252` tương ứng 5 vùng horizon theo thói quen dùng thực tế: 1 tuần, 1 tháng, 1 quý, nửa năm, 1 năm. Tỉ lệ của chúng (`5/252, 22/252, 66/252, 126/252`) được giữ làm hằng số, còn **kích thước khoảng** thay đổi theo từng lần rút — vì vậy bucket không bị gắn cứng vào 252 ngày. Với khoảng `(1, 252)` (window) và `(0, 5)` (lag), cùng một bộ tỉ lệ cho ra 5 bucket trên cả hai, đúng như yêu cầu "252 không fixed nên cut point cũng không fixed được".
+
+Điểm quan trọng về mặt phương pháp: `balanced` **không** làm mọi giá trị bằng nhau. Mỗi giá trị trong bucket thứ 5 (`127-252`, 126 phần tử) có xác suất `0.2/126 ≈ 0.16%`, còn mỗi giá trị trong bucket thứ nhất (`1-5`) có `0.2/5 = 4%`. Đây là hệ quả cố ý: mục tiêu là cân bằng **quy mô horizon** chứ không phải cân bằng **số ngày**.
+
+**Impact on reported results:** Hiện **chưa có con số nào được báo cáo** bị ảnh hưởng — đây là bước sinh expression, chưa phải bước backtest. Nhưng nó quyết định **phân phối không gian alpha**: dưới `uniform`, khoảng thử nghiệm window tập trung ở ngắn hạn, nên alpha sinh ra chủ yếu là momentum/reversal ngắn hạn; dưới `balanced`, 20% mẫu rơi vào window ≥ 127 ngày, nên có alpha trung-dài hạn. Đây là bias **có hệ thống** trong kết quả, không phải nhiễu — reviewer sẽ hỏi "window của các alpha bạn là bao nhiêu" và câu trả lời phải nói rõ phân phối đã dùng.
+
+Lưu ý phát hiện được, **chưa sửa**: default `distribution` không nhất quán giữa các tầng — `sample_int` và `MatrixBinary.get` mặc định `"uniform"`, còn `ts_corr`/`ts_covariance`/`ts_regression` mặc định `"balanced"`. Hệ quả: gọi trực tiếp hàm `ts_*` ra window balanced, còn gọi qua `get()` (đường mà `main.py` dùng) ra uniform. Cần một quyết định chung — hoặc mặc định `"uniform"` ở mọi tầng (giữ hành vi hiện tại của pipeline), hoặc `"balanced"` ở mọi tầng (giữ hành vi hiện tại của hàm `ts_*`). Đã ghi vào bảng giới hạn §9 của `Docs/all-operators.md`, chưa tự quyết.
+
+**Sentiment:** 8 — quyết định này quyết định **bias của toàn bộ không gian alpha** sinh ra; reviewer chắc chắn hỏi về nó, và mặc định lệch giữa các tầng là loại lỗi âm thầm mà phải nói ra.

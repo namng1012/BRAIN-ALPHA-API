@@ -859,3 +859,71 @@
 **Open questions:** `git status` cho thấy `operators.csv` ở thư mục gốc đang staged-delete (`D`) từ trước session này — bản đang dùng nằm ở `cache/operators.csv`. Chưa rõ có muốn commit lại file ở gốc hay không.
 
 **Sentiment:** 7 — đổi tên có lý do ngữ nghĩa rõ ràng, refactor class giữ được byte-identical, và bug thứ tự early-return đã được phát hiện và nêu ra thay vì sửa im lặng.
+
+## 2026-10-24T07:13:11Z | chat-summary | score: 7
+
+**Request:** Ba lượt liên tiếp trên `main.py` / `Functions/operators.py`: (1) "tìm cách thay thế" — thêm `distribution="balanced"` cho `sample_int` với lưu ý **252 không fixed nên cut point cũng không fixed được**, phải dùng ngữ phân vị; (2) "chuyển class này vào `Functions/operators.py`"; (3) "`get()` cần return profile của builder bao gồm tên category, tên hàm, config bên trong, cuối là input matrics và có template".
+
+**Outcome:** Thêm `distribution="balanced"` chia khoảng thành 5 bucket theo **tỉ lệ** (`5/252, 22/252, 66/252, 126/252` × kích thước khoảng) thay vì theo số ngày cố định. Chuyển `MatrixBinary` + `sample_int` + `_balanced_buckets` sang `Functions/operators.py` (`main.py` 465 → 142 dòng). Đổi 10 builder từ trả `str` sang trả `OperatorProfile` dict 5 khóa: `category`, `name`, `config`, `inputs matrics`, `expression`.
+
+**Files touched:**
+- `Functions/operators.py` (`OperatorProfile` TypedDict, `_BUCKET_FRACTIONS`, `_balanced_buckets`, `sample_int`, `class MatrixBinary` → trả profile)
+- `main.py` (bỏ numpy/os/itertools/Literal, import `MatrixBinary`, in `profile["expression"]`)
+- `Docs/all-operators.md` (thêm §8 "Sinh expression từ operator", đổi §8 → §9, cập nhật §7.1, bảng giới hạn)
+- `Diary/*.md` (entry này + 2 entry kỹ thuật + 1 entry methodology)
+
+**Quyết định:** bucket chia theo **tỉ lệ** của kích thước khoảng, không theo số ngày. Lý do: kích thước khoảng không cố định (window 252 ngày, lag 5), nên bản đầu dùng `_REFERENCE_RANGE_SIZE = 252` + `_REFERENCE_CUTS = (5,22,66,126)` vẫn là hard-code 252 — chỉ là ẩn đi. 252 giờ chỉ là tham chiếu để **định nghĩa tỉ lệ**, không phải giả định về range.
+
+**Quyết định:** `distribution` chỉ áp cho window `d`; `lag` và `rettype` luôn uniform. Lý do: `lag`/`rettype` là *enum* (loại đầu ra, độ trễ), không phải *horizon* (độ dài) — chia bucket theo tỉ lệ không có nghĩa với chúng.
+
+**Quyết định:** `OperatorProfile` dùng **functional syntax** của `TypedDict` vì key `'inputs matrics'` có khoảng trắng, class syntax không biểu diễn được (đã verify trên Python 3.14).
+
+**Kiểm chứng:** bucket `(1, 252)` ra đúng `1-5, 6-22, 23-66, 67-126, 127-252`; các range khác scale theo tỉ lệ (`(0,100)` → `0-1, 2-8, 9-25, 26-49, 50-100`; `(1,504)` → `1-10, 11-44, 45-132, 133-252, 253-504`). Phân phối balanced 200k mẫu: 5 bucket ra `20.04/19.95/20.05/20.04/19.93%`. **Uniform giữ bit-exact** — `seed=42 → 161`, `seed=31337 → ts_corr(X,Y,80)`, `seed=777 → ts_regression(X,Y,24,lag=0,rettype=7)`. Profile consistency: mọi giá trị `config` và mọi field trong `inputs matrics` đều xuất hiện trong `expression`, thứ tự `inputs` khớp thứ tự xuất hiện — 10/10 operator đạt. `ruff check main.py` sạch, `py_compile` OK, chạy thật OK.
+
+**Sửa lại sau khi verify:** hai claim ban đầu của entry này sai và đã bỏ — (a) `filter` **không** nằm trong `config` (code đã bỏ nó lúc 14:08; `config` chỉ chứa tham số được rút ngẫu nhiên), (b) `main.py` **không** truyền seed chung cho các operator `ts_*`, nên mỗi operator rút window riêng (`d` ra `154, 6, 200`) — muốn cùng cửa sổ phải gọi builder trực tiếp với `seed` chung (`seed=42` → cả ba ra `d=114`).
+
+**Open questions:** default `distribution` **không nhất quán** giữa các tầng — `sample_int` và `MatrixBinary.get` mặc định `"uniform"`, còn `ts_corr`/`ts_covariance`/`ts_regression` mặc định `"balanced"`. Gọi trực tiếp hàm `ts_*` ra window balanced, gọi qua `get()` ra uniform. Cần một quyết định chung, chưa tự sửa vì đó là quyết định nghiên cứu.
+
+**Sentiment:** 7 — ba lượt tạo ra một kiểu dữ liệu mới (`OperatorProfile`) làm nền cho bước sinh expression, và lưu ý "252 không fixed" đã được xử lý đúng bản chất chứ không chỉ hình thức.
+
+## 2026-10-24T07:13:11Z.1 | chat-summary | score: 6
+
+**Request:** "bây giờ hãy cập nhật Diary và Docs".
+
+**Outcome:** `Docs/all-operators.md` thêm §8 mới ("Sinh expression từ operator: `MatrixBinary`") gồm 5 tiểu mục: profile + bảng key, `config` từng operator, thứ tự field `x, y` vs `y, x`, cơ chế rút tham số uniform/balanced, bit-exact/replay. §8 cũ ("Giới hạn đã biết") thành §9 và thêm 4 giới hạn mới. §7.1 bổ sung dòng trỏ sang §8. Diary ghi 4 entry: 2 chat-summary, 1 code-technique, 1 methodology.
+
+**Files touched:**
+- `Docs/all-operators.md`
+- `Diary/conversation-log.md` (entry này)
+- `Diary/code-technique.md`
+- `Diary/methodology.md`
+
+**Kiểm chứng:** mọi khẳng định trong §8 đối chiếu lại bằng code **chạy thật**, không đọc từ trí nhớ: bảng `config` khớp output thật của 10 operator (`filter` không có trong `config`; `ts_regression` có `d`/`lag`/`rettype`); bảng thứ tự field khớp `inputs matrics` thật; bảng stream/khoảng khớp `sample_int` call site; claim "cùng seed → cùng window" được kiểm bằng cách so `get()` (không seed, ra `154, 6, 200`) với builder trực tiếp có `seed=42` (cả ba ra `114`).
+
+**Bài học:** viết doc song song với code là khi dễ **sai nhất** — hai claim đầu tiên của entry trên (`filter` trong `config`, "dùng chung seed") đều sai, và chỉ lộ ra khi chạy đối chiếu output thật. Doc viết từ trí nhớ về code vừa sửa là nguồn lỗi điển hình.
+
+**Open questions:** không.
+
+**Sentiment:** 6 — entry chat-summary thuần breadcrumb, phần giá trị nằm ở §8 của doc.
+
+## 2026-10-24T07:23:07Z | chat-summary | score: 6
+
+**Request:** "`Functions/operators.py` (226-309) biến đổi thành 1 class và cập nhật lại docs và diary".
+
+**Outcome:** Gom 4 thành phần module-level (`_BUCKET_FRACTIONS`, `_BUCKET_COUNT`, `_balanced_buckets()`, `sample_int()`) thành class `IntegerSampler` với `BUCKET_FRACTIONS` / `BUCKET_COUNT` là hằng số class, `buckets()` và `sample()` là `classmethod`. Cập nhật 6 call site trong `MatrixBinary` từ `sample_int(...)` sang `IntegerSampler.sample(...)`. Docs: §8 thêm bảng 2 class, sửa 4 chỗ nhắc `sample_int`, sửa dòng giới hạn §9. Diary: 2 entry mới.
+
+**Files touched:**
+- `Functions/operators.py` (`class IntegerSampler`, 6 call site trong `MatrixBinary`)
+- `Docs/all-operators.md` (bảng 2 class ở §8, 4 chỗ nhắc `sample_int` → `IntegerSampler.sample`, dòng giới hạn §9, dòng giới thiệu đầu file)
+- `Diary/conversation-log.md` (entry này)
+- `Diary/code-technique.md`
+
+**Quyết định:** `classmethod` chứ không phải `staticmethod` — `buckets()` đọc `BUCKET_FRACTIONS` / `BUCKET_COUNT` ở cấp class, nên nó cần `cls`. `staticmethod` sẽ phải viết `IntegerSampler.BUCKET_FRACTIONS` thủ công ở mọi chỗ và không còn một nguồn sự thật khi subclass đổi hằng số.
+
+**Quyết định:** tên `buckets()` (không phải `balanced_buckets()`) — tiền tố `_balanced_` chỉ phân biệt với hàm module-level, và bên trong class thì "balanced" đã là ngữ nghĩa mặc định của `distribution="balanced"`, không cần nhắc lại.
+
+**Kiểm chứng:** **bit-exact 240/240** — tái tạo lại logic cũ (module-level, copy nguyên văn) rồi so từng giá trị với `IntegerSampler.sample` trên 2 distribution × 5 range (kể cả edge case `(0,1)`, `(5,5)`) × 4 stream × 6 seed: 0 khác biệt. `MatrixBinary` giữ nguyên giá trị: `seed=777 uniform → ts_regression(X, Y, 24, lag = 0, rettype = 7)`, `seed=31337 → ts_corr(X, Y, 80)`. Bucket `(1, 252)` → `1-5, 6-22, 23-66, 67-126, 127-252`. `ruff check main.py` sạch, `py_compile` OK, chạy thật OK.
+
+**Bài học (về verify):** lần đầu tôi viết 3 giá trị "expected" bằng trí nhớ rồi so → 3/3 sai (`195` thực tế là `23`). Giá trị kỳ vọng phải lấy từ **bản cũ chạy thật**, không từ đầu óc. Ở đây bản cũ chưa được commit nên `git stash` không giữ được — phải tái tạo lại logic cũ trong script để so.
+
+**Open questions:** không.
