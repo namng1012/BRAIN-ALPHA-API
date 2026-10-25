@@ -431,3 +431,56 @@ Nếu không có pattern này, pipeline chỉ có thể sinh alpha mới, không
 **Impact on reported results:** Không đổi expression; chỉ đổi nhãn trong profile.
 
 **Sentiment:** 5 — nhãn, nhưng có thể gây nhầm khi lọc theo bucket.
+
+## 2026-10-25T18:08:37Z | methodology | score: 7
+
+**Decision:** Chưa implement Theme; ghi lại phân bố `categoryid` của MATRIX `USA_1_TOP3000` (36854 field) làm cơ sở thiết kế.
+
+**Alternatives considered:**
+- Implement ngay: bị hoãn theo yêu cầu user. Đã chốt theme = `categoryid` và theme không có field thì bỏ qua; còn chờ chốt trọng số khi có nhiều theme (theo dòng hay đều theo theme).
+
+**Rationale:** Random hiện tại rút đều theo dòng nên bị chi phối bởi vài category lớn: model 14591, analyst 6269, other 5834 (tổng 72.4% field); các category nhỏ như imbalance (2 field) gần như không bao giờ được chọn. Nếu theme chọn nhiều category, rút đều theo dòng sẽ lặp lại độ lệch này bên trong theme.
+
+**Impact on reported results:** Cách trọng số theme (theo dòng hay theo theme) đổi phân phối field đầu vào của mọi expression sinh ra.
+
+**Sentiment:** 7 — đổi phân phối lấy mẫu field, reviewer sẽ hỏi về trọng số.
+
+## 2026-10-25T18:11:26Z | methodology | score: 6
+
+**Decision:** Ghi nhận phạm vi theo scope của `categoryid`: chỉ 4/16 category có mặt ở cả 41 scope.
+
+**Alternatives considered:**
+- Chỉ ghi số liệu của `USA_1_TOP3000`: bị loại vì Theme sẽ dùng cho mọi scope, và category vắng làm theme ra rỗng.
+
+**Rationale:** Với quy tắc "theme không có field thì bỏ qua" mà user đã chốt, nếu mọi category của theme đều vắng ở scope đang bốc thì kết quả rỗng. Cần biết điều này trước khi implement để quyết định rỗng thì xử lý thế nào.
+
+**Impact on reported results:** Theme giống nhau cho ra tập field khác nhau giữa các scope; kết quả giữa scope không so sánh trực tiếp được nếu không ghi category thực sự có mặt.
+
+**Sentiment:** 6 — ảnh hưởng thiết kế Theme, reviewer sẽ hỏi về scope thiếu category.
+
+## 2026-10-25T18:15:27Z | methodology | score: 8
+
+**Decision:** Theme khớp `categoryid`; khi có nhiều category, rút đều theo dòng trên tập field thuộc theme (pool), không chia đều theo category.
+
+**Alternatives considered:**
+- Chọn category đều trước rồi mới rút field: giữ cân bằng ngữ nghĩa, nhưng đổi cấu trúc rút (nhiều bước, mỗi category cần stream riêng). User chưa chốt nên chưa làm.
+- Áp theme cho GROUP: bị loại. GROUP chỉ có 3 category (model, other, pv); với theme ['analyst','model','news'] chỉ còn đúng 1 field (một field `model`), nên mọi expression sẽ dùng cùng một group field.
+
+**Rationale:** Cách đơn giản nhất giữ nguyên cơ chế cũ (`choice` không hoàn lại) trên tập con vị trí. Đo với theme đã thử, MATRIX 2000 draw: model 1383, analyst 578, news 39 (khớp tỉ lệ field 14591 : 6269 : 502). Tức `news` gần như vắng mặt, và độ lệch về category lớn vẫn còn bên trong theme.
+
+**Impact on reported results:** Nếu đổi sang đều theo category, phân phối field đầu vào đổi và mọi alpha sinh ra theo theme không tái lập được với bản này. Theme rỗng không đổi gì (đã kiểm bit-exact với seed 42).
+
+**Sentiment:** 8 — đổi phân phối lấy mẫu; reviewer sẽ hỏi vì sao news chỉ ~2%.
+
+## 2026-10-25T18:17:01Z | methodology | score: 7
+
+**Decision:** Áp `theme` cho cả GROUP theo yêu cầu user, dù pool GROUP dưới theme gần như rỗng.
+
+**Alternatives considered:**
+- Không áp theme cho GROUP (làm ở lượt trước): giữ đa dạng group field, nhưng không nhất quán với MATRIX/VECTOR; user yêu cầu áp đủ.
+
+**Rationale:** Đo pool GROUP dưới theme ['analyst','model','news']: rỗng ở 35/41 scope, và là 1 field (`mdl10_group_name`) ở `USA_1_TOPSP500`. GROUP chỉ có 3 category (model, other, pv) nên theme không chứa `other`/`pv` loại gần hết (`other` 1200 và `pv` 469 field ở `USA_1_TOP3000`).
+
+**Impact on reported results:** Mọi expression GROUP trong run dùng cùng một group field; kết quả group-wise không đại diện cho đa dạng group của catalog.
+
+**Sentiment:** 7 — thu hẹp mạnh không gian group field, reviewer sẽ hỏi.

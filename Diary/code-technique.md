@@ -613,3 +613,15 @@ Giờ caller có thể:
 **Reusable in:** mọi builder mới của `MatrixUnary`.
 
 **Sentiment:** 4 — checklist nhỏ.
+
+## 2026-10-25T18:15:27Z | code-technique | score: 6
+
+**Where:** `Functions/data.py` — `CatalogBuilder.sample_field_ids`
+
+**Pattern:** lọc vị trí trước (`np.isin` trên cột), rồi `positions[rng.choice(positions.size, ...)]`; theme rỗng thì `positions = np.arange(n_rows)`.
+
+**Why:** Với theme rỗng `positions[idx] == idx` và `choice(n_rows)` cùng seed ra cùng chỉ số, nên giữ bit-exact với bản trước khi có theme (đã kiểm seed 42). `ScopeCache.column` chỉ giải nén cột `categoryid`.
+
+**Reusable in:** mọi bộ lọc theo cột khác (datasetid, subcategoryid) trước khi rút mẫu.
+
+**Sentiment:** 6 — không phá tái lập khi thêm bộ lọc.

@@ -18,6 +18,10 @@ def main():
     # fail the comparison.
     MIN_COVERAGE = 0.7
 
+    # categoryid values the field draws are restricted to (see
+    # Docs/categoryid.md). Empty keeps the draw uniform over the whole catalog.
+    THEME = ["analyst", "model", "news"]
+
     # Master switch for reaching the platform. True may log in and refetch; False
     # keeps the run entirely on disk, reusing snapshots even after they age out.
     LOGIN_ALLOW = False
@@ -108,7 +112,7 @@ def main():
     # frame_id + scope is what pins the two field ids to one catalog snapshot.
     scope = builder.scopes[-1]
     x, y = builder.sample_field_ids(
-        scope["region"], scope["delay"], scope["universe"], "MATRIX", 2
+        scope["region"], scope["delay"], scope["universe"], "MATRIX", 2, theme=THEME
     )
     # The window is left to each operator to draw: d=None makes it pick from
     # (WINDOW_DAYS_MIN, WINDOW_DAYS_MAX). No seed is passed, so each operator
@@ -190,7 +194,7 @@ def main():
     print("\nVector expression examples")
     # Sample vector field from VECTOR bucket
     vec_x = builder.sample_field_ids(
-        scope["region"], scope["delay"], scope["universe"], "VECTOR", 1
+        scope["region"], scope["delay"], scope["universe"], "VECTOR", 1, theme=THEME
     )[0]
     for name in ["vec_avg", "vec_count", "vec_max", "vec_min", "vec_range", "vec_stddev", "vec_sum"]:
         expression, profile = Vector.get(name, vec_x)
@@ -199,7 +203,7 @@ def main():
     # GROUP operators: group-wise operations.
     # Sample x from MATRIX, and group field from GROUP bucket.
     group = builder.sample_field_ids(
-        scope["region"], scope["delay"], scope["universe"], "GROUP", 1
+        scope["region"], scope["delay"], scope["universe"], "GROUP", 1, theme=THEME
     )[0]
     print("\nGroup expression examples")
     print(f"  group_backfill         {Group.get('group_backfill', x, group)[0]}")

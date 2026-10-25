@@ -345,6 +345,7 @@ class CatalogBuilder:
         data_type: str,
         n: int,
         seed: int | None = None,
+        theme: tuple[str, ...] | list[str] = (),
     ) -> list[str]:
         """Draw `n` distinct field ids at random from one scope's stored catalog.
 
@@ -353,6 +354,13 @@ class CatalogBuilder:
         is re-checked here. Positions are drawn with `replace=False`; asking for
         more than the archive holds returns the whole archive instead of raising,
         because a smaller sample is still a valid answer.
+
+        `theme` is a collection of `categoryid` values. Empty keeps the draw
+        uniform over the whole archive, bit-exact with the draw before `theme`
+        existed. Non-empty restricts the draw to rows whose `categoryid` is in
+        the theme, still uniform over those rows: a category with more fields in
+        the scope is drawn proportionally more often. A theme category absent
+        from this scope and type matches no row and is skipped.
 
         `seed=None` draws fresh entropy from the OS CSPRNG, so the sample is not
         anchored to any fixed constant; the seed actually used is returned with
@@ -364,9 +372,15 @@ class CatalogBuilder:
         cache = self.cache.open(scope, data_type)
         if seed is None:
             seed = int.from_bytes(os.urandom(8), "big")
-        picked = np.random.default_rng(seed).choice(
-            cache.n_rows, size=min(n, cache.n_rows), replace=False
-        )
+        if len(theme):
+            positions = np.flatnonzero(np.isin(cache.column("categoryid"), theme))
+        else:
+            positions = np.arange(cache.n_rows)
+        picked = positions[
+            np.random.default_rng(seed).choice(
+                positions.size, size=min(n, positions.size), replace=False
+            )
+        ]
         field_ids = cache.take(picked, columns=["fieldid"])["fieldid"].tolist()
         cache.close()
         return field_ids

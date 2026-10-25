@@ -1309,3 +1309,66 @@
 - `profile["category"]` của `if_else`/`trade_when` nên là `SELECT` không?
 
 **Sentiment:** 7 — mốc chốt giai đoạn, kèm một lỗi khoa học tiềm ẩn chưa sửa.
+
+## 2026-10-25T18:08:37Z | chat-summary | score: 6
+
+**Request:** Thêm biến Theme cho `sample_field_ids` (rỗng thì random như cũ, có giá trị thì bốc data theo theme, dựa trên cột `categoryid`). Trước tiên: `categoryid` có bao nhiêu category?
+
+**Outcome:**
+- Đếm trên snapshot đầy đủ `USA_1_TOP3000`: MATRIX 16 categoryid, VECTOR 14, GROUP 3; hợp cả ba type vẫn là 16. `categoryid` và `categoryname` ánh xạ 1:1.
+- File `matrix_head100.csv` chỉ có 5 categoryid (analyst, earnings, fundamental, model, shortinterest) vì 100 dòng đầu theo thứ tự alphabet của `fieldid`, không đại diện cho 16.
+- Chưa sửa code. User đã chốt: Theme khớp `categoryid`; theme không có field trong scope/type đang bốc thì bỏ qua. User yêu cầu dừng ở đây, "đừng code vội".
+
+**Files touched:** none (chỉ đọc cache)
+
+**Open questions:** Nhiều theme thì chia đều theo theme hay theo số dòng (user chưa chốt)? Theme truyền vào dạng tuple hay list, đặt ở tham số của `sample_field_ids` hay biến cấu hình trong `main()`?
+
+**Sentiment:** 6 — đo phân bố category, là đầu vào cho thay đổi lấy mẫu.
+
+## 2026-10-25T18:11:26Z | chat-summary | score: 4
+
+**Request:** Lưu các categoryid vào Docs với tên file `categoryid.md`.
+
+**Outcome:**
+- Tạo `Docs/categoryid.md`: bảng 16 categoryid x (MATRIX, VECTOR, GROUP, dataset, subcategory) từ snapshot `USA_1_TOP3000`, độ lệch phân phối (3 category lớn chiếm 72,4% MATRIX), và đoạn code sinh lại bảng.
+- Đo thêm trên 41 scope đã cache: hợp 16 categoryid, nhưng chỉ 4 có mặt ở mọi scope (analyst, model, news, other). Đã ghi vào mục 3 của doc.
+
+**Files touched:**
+- `Docs/categoryid.md`
+
+**Open questions:** Vẫn chờ user chốt trọng số theme (theo dòng hay đều theo theme) và chỗ đặt biến Theme. Theme bỏ qua category vắng sẽ có thể ra rỗng ở scope không có category đó.
+
+**Sentiment:** 4 — tài liệu hoá số liệu đã đo.
+
+## 2026-10-25T18:15:27Z | chat-summary | score: 7
+
+**Request:** Sửa `sample_field_ids` (`Functions/data.py`) và `main.py` với "theme"; thử với theme = ['analyst', 'model', 'news'].
+
+**Outcome:**
+- `sample_field_ids` nhận thêm `theme: tuple | list = ()` (categoryid). Rỗng: giữ nguyên thuật toán cũ. Có giá trị: lọc vị trí theo `categoryid` rồi rút đều trên các dòng đó.
+- `main.py`: thêm hằng `THEME` trong `main()`, truyền vào lời gọi MATRIX và VECTOR. Lời gọi GROUP không truyền theme.
+- Kiểm: theme rỗng cùng seed 42 ra đúng bản cũ cho cả 3 type; draw 2000 field MATRIX/VECTOR đều thuộc theme, không trùng; replay cùng seed khớp; theme không tồn tại trả `[]`.
+
+**Files touched:**
+- `Functions/data.py`
+- `main.py`
+
+**Open questions:** Trọng số theo dòng (hiện tại) hay đều theo theme? GROUP có áp theme không? `sample_field_ids` trả `[]` khi theme không khớp; `main.py` hiện chỉ lấy `[0]` nên sẽ lỗi IndexError ở scope thiếu category.
+
+**Sentiment:** 7 — đổi phân phối field đầu vào.
+
+## 2026-10-25T18:17:01Z | chat-summary | score: 5
+
+**Request:** Một số chỗ gọi `builder.sample_field_ids` trong `main.py` chưa có theme.
+
+**Outcome:**
+- Lời gọi GROUP (dòng 205) còn thiếu `theme=THEME`; đã thêm, giờ cả 3 lời gọi (MATRIX, VECTOR, GROUP) đều truyền theme.
+- Đo pool GROUP dưới theme ['analyst','model','news'] trên 41 scope: 35 scope rỗng, chỉ `USA_1_*` có pool; ở `USA_1_TOPSP500` (scope `main()` đang dùng) pool đúng 1 field: `mdl10_group_name`.
+- `uv run main.py` chạy sạch.
+
+**Files touched:**
+- `main.py`
+
+**Open questions:** GROUP có nên bị ràng buộc bởi theme không? Với theme này mọi expression GROUP dùng cùng một group field, và scope khác `USA_1_*` sẽ `IndexError` ở `[0]`.
+
+**Sentiment:** 5 — hoàn tất thay đổi trước, kèm phát hiện về pool GROUP.
