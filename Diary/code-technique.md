@@ -565,3 +565,51 @@ Giờ caller có thể:
 - **Publication-grade reproducibility:** paper appendix có thể liệt kê exact config của mọi alpha.
 
 **Sentiment:** 9 — quyết định này ảnh hưởng reproducibility của toàn bộ alpha generation pipeline. Không có pattern này thì không thể tái tạo bit-exact expression từ `config`, phá vỡ audit trail requirement của research codebase.
+
+## 2026-10-25T17:31:47Z | code-technique | score: 4
+
+**Where:** `main.py` — `trade_when`
+
+**Pattern:** tham số ngẫu nhiên là `None` mặc định, chỉ rút khi caller không truyền; mỗi draw một stream cố định (1 đến 4).
+
+**Why:** cho phép replay một alpha cụ thể bằng cách truyền lại config, và rút phần còn lại ngẫu nhiên. Stream cố định nên thêm draw mới không làm lệch giá trị của draw cũ.
+
+**Reusable in:** mọi builder có tham số rút ngẫu nhiên (`MatrixBinary.if_else`).
+
+**Sentiment:** 4 — pattern đã có trong codebase.
+
+## 2026-10-25T17:36:11Z | code-technique | score: 4
+
+**Where:** `main.py` — `trade_when`
+
+**Pattern:** một tham số `distribution` keyword-only điều khiển toàn bộ draw của builder, truyền xuống từng `FloatSampler.sample` / `IntegerSampler.sample`.
+
+**Why:** caller chọn uniform hoặc balanced một lần cho cả template, thay vì mỗi draw hardcode riêng.
+
+**Reusable in:** mọi builder mới có tham số rút ngẫu nhiên.
+
+**Sentiment:** 4 — giống `if_else`.
+
+## 2026-10-25T17:39:06Z | code-technique | score: 3
+
+**Where:** `Functions/operators.py` — `MatrixUnary.trade_when`
+
+**Pattern:** builder chuyển từ `main.py` sang class operator; stream 1 đến 4 của `trade_when` trùng số với `WINDOW_STREAM=1`... nhưng không xung đột vì mỗi lần gọi dùng `seed=None` (entropy mới).
+
+**Why:** nếu sau này truyền seed cố định vào `trade_when`, các stream 1 đến 4 nên chuyển thành hằng số `*_STREAM` riêng như các builder còn lại.
+
+**Reusable in:** các builder khác của `MatrixUnary`.
+
+**Sentiment:** 3 — ghi chú nhỏ.
+
+## 2026-10-25T17:41:43Z | code-technique | score: 4
+
+**Where:** `Functions/operators.py` — `MatrixUnary.get`, `MatrixUnary.trade_when`
+
+**Pattern:** thêm builder mới vào `MatrixUnary` cần 3 chỗ: dict `builders`, tuple tên nhận `distribution` trong `get`, và trả `_profile(...)` để config replay được.
+
+**Why:** thiếu chỗ nào là `get` lỗi `KeyError` hoặc `TypeError` (builder bị gọi với/không có `distribution`).
+
+**Reusable in:** mọi builder mới của `MatrixUnary`.
+
+**Sentiment:** 4 — checklist nhỏ.

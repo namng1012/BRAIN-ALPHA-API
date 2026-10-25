@@ -334,3 +334,100 @@ Verified: `uv run python main.py` exit 0. Audit: rà soát toàn bộ `IntegerSa
 Nếu không có pattern này, pipeline chỉ có thể sinh alpha mới, không thể tái tạo alpha cũ → không qualify làm research codebase.
 
 **Sentiment:** 10 — đây là điều kiện tiên quyết (prerequisite) của reproducibility, ảnh hưởng toàn bộ workflow từ alpha generation → backtesting → publication. Không có quyết định này thì không thể đạt publication-grade reproducibility. Reviewer sẽ reject paper nếu không thể verify lại alphas.
+
+## 2026-10-25T17:28:07Z | methodology | score: 6
+
+**Decision:** Ngưỡng t1 (trigger `ts_rank(x, 252) > t1`) và t2 (đối số thứ hai của `ts_zscore`) lấy từ `FloatSampler` trong [0, 0.1], distribution mặc định "balanced", stream 1 và 2.
+
+**Alternatives considered:**
+- Giá trị cố định 0.01 và 0.002: bị user thay bằng random.
+- Range mặc định 0..3 của `FloatSampler`: quá rộng cho ngưỡng trên ts_rank (∈ [0, 1]).
+
+**Rationale:** Theo yêu cầu user. Range [0, 0.1] giữ trigger ở vùng đuôi thấp của ts_rank.
+
+**Impact on reported results:** Đổi range thay đổi tần suất trigger của `trade_when`, ảnh hưởng turnover và PnL của alpha.
+
+**Sentiment:** 6 — reviewer sẽ hỏi vì sao 0.1 và t2 có phải window hay không.
+
+## 2026-10-25T17:29:46Z | methodology | score: 6
+
+**Decision:** Exit condition của `trade_when` là `abs(ts_zscore(x, 252)) < t2`, t2 ~ FloatSampler [0, 0.1]; window của ts_zscore cố định 252, cùng window với trigger `ts_rank(x, 252) > t1`.
+
+**Alternatives considered:**
+- `abs(ts_zscore(x, t2))` với t2 là window: sai, t2 ∈ [0, 0.1] không phải window hợp lệ.
+
+**Rationale:** Theo user. Cả hai thành phần dùng cùng lookback 252 ngày (một năm giao dịch), nhất quán với `if_else`.
+
+**Impact on reported results:** t2 nhỏ nghĩa là chỉ giữ lệnh khi x gần trung bình 252 ngày của chính nó; đổi range của t2 thay đổi turnover.
+
+**Sentiment:** 6 — reviewer sẽ hỏi vì sao range [0, 0.1] và vì sao 252 cố định.
+
+## 2026-10-25T17:30:52Z | methodology | score: 6
+
+**Decision:** Hai window của `trade_when` (d1 cho `ts_rank`, d2 cho `ts_zscore`) rút độc lập từ [1, 252], balanced, stream 3 và 4; stream 1 và 2 giữ nguyên cho t1 và t2 nên giá trị t1, t2 không đổi khi thêm draw.
+
+**Alternatives considered:**
+- Một window dùng chung cho cả hai: đơn giản hơn nhưng thu hẹp không gian tìm kiếm.
+- Window cố định 252: bị user thay bằng random.
+
+**Rationale:** Theo yêu cầu user. Range lấy từ `MatrixUnary.WINDOW_DAYS` để cùng phân phối với các ts_* operator khác.
+
+**Impact on reported results:** Không gian alpha của `trade_when` rộng ra 4 chiều (d1, d2, t1, t2); window ngắn làm trigger nhiễu hơn và tăng turnover.
+
+**Sentiment:** 6 — reviewer sẽ hỏi vì sao hai window độc lập.
+
+## 2026-10-25T17:34:10Z | methodology | score: 6
+
+**Decision:** Window d1 (`ts_rank`) và d2 (`ts_zscore`) của `trade_when` rút từ [100, 252], balanced, thay cho [1, 252].
+
+**Alternatives considered:**
+- [1, 252] (`MatrixUnary.WINDOW_DAYS`): window ngắn làm `ts_rank` và `ts_zscore` nhiễu, trigger thất thường.
+
+**Rationale:** Theo user. Window dài (xấp xỉ nửa năm đến một năm giao dịch) cho ước lượng rank và z-score ổn định hơn.
+
+**Impact on reported results:** Bỏ window < 100 làm giảm turnover và bỏ các biến thể phản ứng nhanh; range này lệch khỏi `WINDOW_DAYS` dùng cho các ts_* khác.
+
+**Sentiment:** 6 — reviewer sẽ hỏi vì sao 100 và vì sao khác range của các ts_* operator còn lại.
+
+## 2026-10-25T17:43:49Z | methodology | score: 7
+
+**Decision:** Window của `ts_rank` bọc operand trong `if_else` rút ngẫu nhiên từ [60, 252] (độc lập cho x và y), thay cho hằng số 252.
+
+**Alternatives considered:**
+- Giữ 252 cố định: ổn định nhưng không khám phá được horizon ngắn hơn.
+- Dùng chung một window cho x và y: so sánh `s1*rank_x > s2*rank_y` cùng horizon, nhưng user chưa yêu cầu.
+
+**Rationale:** Theo user; cùng range [60, 252] với `trade_when`, nên hai template selector nhất quán.
+
+**Impact on reported results:** Alpha sinh bởi `if_else` không còn tái lập từ expression cũ có 252 cố định. Phải ghi `dx`, `dy` trong profile để replay (đã làm). Hai operand có thể có horizon khác nhau, nên so sánh rank giữa hai thang thời gian khác nhau.
+
+**Sentiment:** 7 — đổi phân phối alpha sinh ra, reviewer sẽ hỏi vì sao dx và dy độc lập.
+
+## 2026-10-25T17:52:00Z | methodology | score: 8
+
+**Decision:** Chốt giai đoạn 1 (expression cơ bản) ở 68/84 operator có builder; không sửa lỗi phát hiện ở `Group` mà ghi lại chờ user quyết định.
+
+**Alternatives considered:**
+- Sửa ngay `Group` mode 5: bị loại vì chưa biết mode 5 định dựng gì; sửa đoán là đổi hành vi khoa học mà không có nguồn.
+- Đợi làm đủ 84 operator mới chốt: bị loại vì 16 operator còn lại (BOOLEAN, VARIADIC, GROUPING, `ts_step`) có độ phức tạp ghép nối khác hẳn, thuộc phạm vi giai đoạn sau.
+
+**Rationale:** Mốc chốt cần kiểm được. Số 68 lấy bằng cách chạy từng tên của `cache/operators.csv` qua `get()`, không đếm tay.
+
+**Latent scientific issue (không sửa, theo rule 04/09):** `Group` mode 4 và 5 ra cùng chuỗi `densify(group_cartesian_product(bucket(rank(x), ...), group))` cho cả 9 operator. `mode` rút đều `{1..5}` nên dạng này chiếm 40% mẫu thay vì 20%, và mode 5 không phải một biến thể riêng. Cần user chỉ nguồn hoặc ý định của mode 5.
+
+**Impact on reported results:** Phân phối cấu trúc group trong alpha sinh ra bị lệch về dạng cartesian-product. Nếu sửa mode 5 thì mọi alpha `Group` sinh từ mode 5 sẽ đổi expression.
+
+**Sentiment:** 8 — ảnh hưởng phân phối alpha, reviewer sẽ hỏi vì sao mode trùng nhau.
+
+## 2026-10-25T17:52:00Z.1 | methodology | score: 5
+
+**Decision:** Hai builder `SELECT` (`if_else`, `trade_when`) nằm trong class matrix và gắn `category` `MATRIX_BINARY` / `MATRIX_UNARY`, không phải `SELECT`.
+
+**Alternatives considered:**
+- Class `Select` riêng với `category="SELECT"`: khớp bảng §5 nhưng user chưa yêu cầu, và hai builder dùng chung `_profile` của class matrix.
+
+**Rationale:** Giữ nguyên hiện trạng; ghi vào Docs §10.3 để giai đoạn 2 quyết định, vì bước ghép expression sẽ cần biết operator nào là selector.
+
+**Impact on reported results:** Không đổi expression; chỉ đổi nhãn trong profile.
+
+**Sentiment:** 5 — nhãn, nhưng có thể gây nhầm khi lọc theo bucket.

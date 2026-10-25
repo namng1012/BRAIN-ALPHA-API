@@ -1102,3 +1102,210 @@
 **Open questions:** none
 
 **Sentiment:** 9 — quyết định này ảnh hưởng reproducibility của toàn bộ pipeline. Mọi alpha expression từ giờ có thể tái tạo bit-exact từ `config`. Đây là foundation cho audit trail, A/B testing, và publication-grade reproducibility.
+
+## 2026-10-25T16:43:58Z | chat-summary | score: 7
+
+**Request:** Tạo function `if_else(x, y)` để build conditional selection expression. Ban đầu chỉ return expression string, sau đó thêm FloatSampler cho 2 hệ số s1, s2 trong range [1, 2]. User muốn: (1) check x, y không bắt đầu bằng rank operators (`ts_rank(`, `rank(`, `scale(`, `ts_scale(`), nếu chưa thì wrap `ts_rank(*, 252)`. (2) Follow template từ `MatrixUnary.rank()` để return tuple và lưu profile.
+
+**Outcome:**
+- `if_else(x, y, s1=None, s2=None, *, distribution="balanced") -> tuple[str, OperatorProfile]`
+- Auto-wrap x, y với `ts_rank(*, 252)` nếu không bắt đầu bằng 4 rank operators → tránh nested rank + silent double-wrapping.
+- `s1`, `s2` là optional params, auto-sample từ [1.0, 2.0] nếu None; có thể override explicit.
+- Return `(expression, profile)` với profile chứa `{"category": "SELECT", "name": "if_else", "config": {"s1": ..., "s2": ...}}`.
+- Verified: auto-sample case, explicit params, rank-operator inputs.
+
+**Files touched:**
+- `main.py` — thêm `if_else()` function với rank-operator detection + OperatorProfile template.
+
+**Open questions:** none
+
+**Sentiment:** 7 — pattern này (conditional wrapping rank operators) có thể tái sử dụng cho các binary operators khác. Không trivial logic, reviewer sẽ hỏi tại sao không nested rank.
+
+
+## 2026-10-25T16:45:12Z | chat-summary | score: 6
+
+**Request:** Move `if_else()` function từ `main.py` vào class `MatrixBinary` trong `Functions/operators.py`.
+
+**Outcome:**
+- Thêm `MatrixBinary.if_else(x, y, s1=None, s2=None, *, distribution="balanced")` → return `tuple[str, OperatorProfile]`.
+- Cập nhật `MatrixBinary.get()` builders dict thêm `"if_else": MatrixBinary.if_else`.
+- Cập nhật logic distribution check: `if name.startswith("ts_") or name=="if_else":` để pass distribution param.
+- Xoá `if_else()` khỏi `main.py`, loại bỏ unused imports `Literal`, `FloatSampler`, `IntegerSampler`.
+- Thêm `"if_else"` vào demo loop trong `main.py` → giờ render trong binary expression examples.
+- Verified: `uv run python main.py` exit 0, if_else output có rank-operator wrapping + sampled s1, s2.
+
+**Files touched:**
+- `Functions/operators.py` — thêm `if_else()` method vào MatrixBinary class, cập nhật `get()`.
+- `main.py` — xoá `if_else()` function, cleanup imports, thêm vào demo.
+
+**Open questions:** none
+
+**Sentiment:** 6 — straightforward refactor, chuyển function từ entry point vào operator class.
+
+
+## 2026-10-25T17:28:07Z | chat-summary | score: 5
+
+**Request:** `trade_when` nhận 1 input x, ba tham số là `ts_rank(x, 252) > t1`, `x`, `abs(ts_zscore(x, t2))`; t1 và t2 random trong [0, 0.1].
+
+**Outcome:**
+- `trade_when(x)` trong `main.py` chỉ trả expression string, t1/t2 từ `FloatSampler.sample((0.0, 0.1), None, stream 1/2)`.
+- Thêm import `FloatSampler` vào `main.py`.
+- Verified bằng 3 lần gọi, output đúng dạng.
+
+**Files touched:**
+- `main.py`
+
+**Open questions:** `ts_zscore(x, t2)` nhận `d` là window (int) theo `Docs/all-operators.md`; t2 float trong [0, 0.1] có thể bị platform từ chối.
+
+**Sentiment:** 5 — breadcrumb, nhưng có open question về kiểu của `d`.
+
+## 2026-10-25T17:29:46Z | chat-summary | score: 4
+
+**Request:** Đối số thứ ba của `trade_when` phải là `abs(ts_zscore(x, 252)) < t2`, không phải `abs(ts_zscore(x, t2))`.
+
+**Outcome:**
+- Sửa f-string trong `trade_when(x)`: window cố định 252, t2 thành ngưỡng so sánh `< t2`.
+- Cập nhật docstring cho khớp. Verified bằng 3 lần gọi.
+- Open question ở turn trước (t2 là float so với window nguyên) được giải quyết: t2 là ngưỡng, không phải window.
+
+**Files touched:**
+- `main.py`
+
+**Open questions:** none
+
+**Sentiment:** 4 — sửa nhỏ, nhưng sửa lại một hiểu sai của turn trước.
+
+## 2026-10-25T17:30:52Z | chat-summary | score: 4
+
+**Request:** Window 252 trong `trade_when` nên random luôn.
+
+**Outcome:**
+- `trade_when(x)` rút window d1 (cho `ts_rank`) và d2 (cho `ts_zscore`) độc lập bằng `IntegerSampler` trên `MatrixUnary.WINDOW_DAYS` = (1, 252), distribution "balanced", stream 3 và 4.
+- Import thêm `IntegerSampler` vào `main.py`. Verified bằng 3 lần gọi.
+- File lúc đọc lại có `ts_rank({x}, )` thiếu window (user sửa tay), đã thay bằng `{d1}`.
+
+**Files touched:**
+- `main.py`
+
+**Open questions:** d1 và d2 độc lập hay nên dùng chung một window? Hiện tại độc lập.
+
+**Sentiment:** 4 — thay hằng số bằng sampler.
+
+## 2026-10-25T17:31:47Z | chat-summary | score: 4
+
+**Request:** t1, t2, d1, d2 phải nằm trong input của `trade_when` với giá trị khởi tạo None.
+
+**Outcome:**
+- `trade_when(x, t1=None, t2=None, d1=None, d2=None)`; mỗi tham số None mới được rút, truyền giá trị thì dùng nguyên giá trị đó.
+- Verified 3 trường hợp: không truyền gì, truyền một phần, truyền đủ.
+
+**Files touched:**
+- `main.py`
+
+**Open questions:** none
+
+**Sentiment:** 4 — cùng pattern `s1=None, s2=None` của `if_else`.
+
+## 2026-10-25T17:34:10Z | chat-summary | score: 4
+
+**Request:** Range random của window trong `trade_when` nên là 100 đến 252.
+
+**Outcome:**
+- d1 và d2 giờ rút từ `(100, 252)` thay vì `MatrixUnary.WINDOW_DAYS` = (1, 252); docstring cập nhật.
+- Verified 4000 draw: min 100, max 252.
+
+**Files touched:**
+- `main.py`
+
+**Open questions:** none
+
+**Sentiment:** 4 — đổi range, nhỏ.
+
+## 2026-10-25T17:36:11Z | chat-summary | score: 4
+
+**Request:** `trade_when` thiếu `distribution` trong template.
+
+**Outcome:**
+- Thêm tham số keyword-only `distribution: Literal["uniform", "balanced"] = "balanced"`, theo template của `MatrixBinary.if_else`.
+- t1, t2, d1, d2 đều rút theo `distribution` này; trước đó d1, d2 hardcode "balanced" và t1, t2 dùng default của `FloatSampler`.
+- Import `Literal` vào `main.py`. Verified với `uniform` và `balanced`.
+- Window range trong file lúc đọc là [60, 252] (user sửa tay từ 100).
+
+**Files touched:**
+- `main.py`
+
+**Open questions:** none
+
+**Sentiment:** 4 — căn chỉnh theo template có sẵn.
+
+## 2026-10-25T17:39:06Z | chat-summary | score: 4
+
+**Request:** Di chuyển `trade_when` từ `main.py` vào class `MatrixUnary` trong `Functions/operators.py`.
+
+**Outcome:**
+- Thêm `MatrixUnary.trade_when` (staticmethod, đặt trước `ts_arg_max`), logic giữ nguyên; xóa hàm khỏi `main.py` cùng import `Literal`, `FloatSampler`, `IntegerSampler` không còn dùng.
+- Verified `MatrixUnary.trade_when` chạy với và không có tham số; `main` không còn `trade_when`.
+- Hàm trả `str` chứ không phải `tuple[str, OperatorProfile]` như các builder khác, và chưa có trong dict `builders` của `MatrixUnary.get`; giữ nguyên vì chưa được yêu cầu.
+
+**Files touched:**
+- `Functions/operators.py`
+- `main.py`
+
+**Open questions:** `trade_when` có cần trả `(expression, profile)` và đăng ký vào `MatrixUnary.get` không? Nó cũng nhận 1 field nhưng platform xếp `trade_when` vào SELECT, không phải MATRIX_UNARY.
+
+**Sentiment:** 4 — di chuyển code, không đổi hành vi.
+
+## 2026-10-25T17:41:43Z | chat-summary | score: 4
+
+**Request:** Thêm `trade_when` vào danh sách "Unary expression examples" trong `main.py`.
+
+**Outcome:**
+- Thêm `"trade_when"` vào list trong `main()`, sau `"tail"`.
+- Để `MatrixUnary.get("trade_when", x)` chạy được: đăng ký vào dict `builders`, thêm vào nhóm operator nhận `distribution`, và đổi `trade_when` trả `(expression, profile)` với config `t1, t2, d1, d2`.
+- Verified `MatrixUnary.get` với `balanced` và `uniform`. Chưa chạy `main()` đầy đủ vì cần login.
+
+**Files touched:**
+- `main.py`
+- `Functions/operators.py`
+
+**Open questions:** `Docs/all-operators.md` chưa cập nhật; `OperatorProfile.config` khai báo `int | bool` nhưng đã chứa float (như `tail`).
+
+**Sentiment:** 4 — wiring theo pattern có sẵn.
+
+## 2026-10-25T17:43:49Z | chat-summary | score: 5
+
+**Request:** Window 252 trong `ts_rank(*, 252)` của `MatrixBinary.if_else` cũng nên random từ 60 đến 252.
+
+**Outcome:**
+- Thêm `dx`, `dy` (mặc định `None`) vào `if_else`; mỗi window rút độc lập từ `(60, 252)` theo `distribution`, stream 3 và 4.
+- Window chỉ được rút và ghi vào `config` khi operand thực sự được bọc `ts_rank`; operand đã là rank operator thì không có `dx`/`dy`.
+- Verified 2000 lần gọi: min 60, max 252. Các trường hợp bọc một phía, không bọc, và truyền `dx`/`dy` tay đều đúng.
+
+**Files touched:**
+- `Functions/operators.py`
+
+**Open questions:** none
+
+**Sentiment:** 5 — đổi hành vi sinh expression của `if_else`.
+
+## 2026-10-25T17:52:00Z | chat-summary | score: 7
+
+**Request:** Cập nhật diary và Docs: các expression cơ bản đã xong ở giai đoạn 1, chuẩn bị sang giai đoạn 2.
+
+**Outcome:**
+- `Docs/all-operators.md`: thêm §10 chốt giai đoạn 1 (68/84 operator có builder, 16 chưa có), cập nhật §8 cho `Vector`, `Group`, `if_else`, `trade_when` (cả `dx`/`dy` và `d1`/`d2`), sửa mục "Giới hạn đã biết".
+- Kiểm trực tiếp: chạy từng tên trong CSV qua `get()` của class tương ứng; 68 pass, 16 thuộc `MATRIX_GENERATED`, `VARIADIC`, `BOOLEAN`, `GROUPING` chưa có builder.
+- Phát hiện khi đọc `Group`: mode 4 và mode 5 sinh cùng một chuỗi expression; chưa sửa, ghi vào §10.3.
+- §10.4 (phạm vi giai đoạn 2) để trống: không tìm thấy định nghĩa giai đoạn 2 trong repo.
+
+**Files touched:**
+- `Docs/all-operators.md`
+- `Diary/conversation-log.md`
+- `Diary/methodology.md`
+
+**Open questions:**
+- Phạm vi giai đoạn 2 là gì?
+- `Group` mode 5 định dựng gì khác mode 4?
+- `profile["category"]` của `if_else`/`trade_when` nên là `SELECT` không?
+
+**Sentiment:** 7 — mốc chốt giai đoạn, kèm một lỗi khoa học tiềm ẩn chưa sửa.

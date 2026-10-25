@@ -1,14 +1,8 @@
 import sys
-from typing import Literal
-
 from Functions.cache import CATALOG_MAX_AGE_SECONDS
 from Functions.data import BrainData, CatalogBuilder
 from Functions.login import RELOGIN_THRESHOLD_SECONDS, BrainLogin
 from Functions.operators import OPERATORS_CSV_PATH, MatrixBinary, MatrixUnary, Vector, Group, OperatorProfile, OperatorTable
-from Functions.random import FloatSampler, IntegerSampler
-
-
-
 
 
 def main():
@@ -16,7 +10,7 @@ def main():
     # printout of the catalog would abort on the default Windows console
     # encoding.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
+    
     # Keep only fields that are populated enough to backtest on: the field's own
     # coverage (fraction of the universe the field is defined for) and its
     # dateCoverage (fraction of the history the field spans) must both clear the
@@ -130,6 +124,7 @@ def main():
     for name in (
         "add",
         "divide",
+        "if_else",
         "multiply",
         "power",
         "signed_power",
@@ -162,6 +157,7 @@ def main():
         "sign",
         "sqrt",
         "tail",
+        "trade_when",
         "ts_arg_max",
         "ts_arg_min",
         "ts_av_diff",

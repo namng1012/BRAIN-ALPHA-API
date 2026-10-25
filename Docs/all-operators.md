@@ -27,7 +27,7 @@ Một operator publish thuộc nhiều scope: sau `explode("scope")` có **212 d
 
 **Điểm vận hành:** `/operators` cần auth, nên tốn login. Bảng được cache thành **một file CSV duy nhất** ở `cache/operators.csv`; từ lần chạy thứ hai trở đi, file còn trên đĩa là không cần gọi platform nữa. Luồng xử lý 3 nhánh trong `main.py` xem §7.2.
 
-Tài liệu này gồm hai phần: **§1–§7** mô tả bảng phân loại 84 operator (sinh từ `/operators`), còn **§8** mô tả phần dựng FASTEXPR từ operator đó (`MatrixBinary` + `IntegerSampler`).
+Tài liệu này gồm ba phần: **§1–§7** mô tả bảng phân loại 84 operator (sinh từ `/operators`), **§8** mô tả phần dựng FASTEXPR từ operator đó (`MatrixBinary`, `MatrixUnary`, `Vector`, `Group` + sampler), và **§10** chốt trạng thái giai đoạn 1 (expression cơ bản) làm đầu vào cho giai đoạn 2.
 
 ---
 
@@ -353,17 +353,21 @@ Sau khi login, `main.py` xử lý `/operators` **trước** catalog:
 
 ---
 
-## 8. Sinh expression từ operator: `MatrixBinary` và `MatrixUnary`
+## 8. Sinh expression từ operator: `MatrixBinary`, `MatrixUnary`, `Vector`, `Group`
 
-Bảng ở §5 cho biết **operator nào** tồn tại. Hai class `MatrixBinary` và `MatrixUnary` trong `Functions/operators.py` là phần **dựng expression** từ operator đó: với mỗi operator trong bucket tương ứng, chúng dựng một lời gọi FASTEXPR hoàn chỉnh với field thật và các tham số được rút ra ngẫu nhiên (hoặc nhận trực tiếp để reproduce).
+Bảng ở §5 cho biết **operator nào** tồn tại. Các class trong `Functions/operators.py` là phần **dựng expression** từ operator đó: với mỗi operator trong bucket tương ứng, chúng dựng một lời gọi FASTEXPR hoàn chỉnh với field thật và các tham số được rút ra ngẫu nhiên (hoặc nhận trực tiếp để reproduce).
 
-File này có **ba** class phục vụ việc dựng expression:
+File này có **bốn** class dựng expression, cộng hai sampler:
 
 | Class | Việc |
 | --- | --- |
-| `MatrixBinary` | Dựng FASTEXPR cho 10 operator của bucket `MATRIX_BINARY` — xem §8.1–§8.3 |
-| `MatrixUnary` | Dựng FASTEXPR cho 40 operator của bucket `MATRIX_UNARY` — xem §8.6 |
+| `MatrixBinary` | 10 operator của bucket `MATRIX_BINARY` **+ `if_else`** (bucket `SELECT`) — xem §8.1–§8.3 |
+| `MatrixUnary` | 40 operator của bucket `MATRIX_UNARY` **+ `trade_when`** (bucket `SELECT`) — xem §8.6 |
+| `Vector` | 7 operator của bucket `VECTOR`, không có tham số rút — xem §8.7 |
+| `Group` | 9 operator của bucket `GROUP`, kèm 5 chế độ dựng group — xem §8.7 |
 | `IntegerSampler`, `FloatSampler` | Rút tham số số ngẫu nhiên (window `d`, `lag`, `rettype`, `std`, v.v.) — xem §8.4–§8.5 |
+
+`if_else` và `trade_when` là hai operator duy nhất của bucket `SELECT`; chúng nằm trong class matrix vì builder của chúng chỉ nhận field matrix. Hệ quả: `profile["category"]` của chúng là `MATRIX_BINARY` / `MATRIX_UNARY`, **không** phải `SELECT` như bảng §5 (xem §10.3).
 
 ### 8.1 Return type: tuple `(expression, profile)`
 
@@ -438,6 +442,7 @@ def ts_corr(x: str, y: str, d: int | None = None, *, distribution="balanced"):
 | `MATRIX_BINARY` | `add`, `divide`, `multiply`, `power`, `signed_power`, `subtract`, `vector_neut` | Không có (expression deterministic) |
 | | `ts_corr`, `ts_covariance` | `d` (window) |
 | | `ts_regression` | `d` (window), `lag`, `rettype` |
+| | `if_else` (bucket `SELECT`) | `s1`, `s2` (float), `dx`, `dy` (window, chỉ khi operand được bọc `ts_rank`) |
 | `MATRIX_UNARY` | `abs_`, `inverse`, `log`, `pasteurize`, `reverse`, `sign`, `sqrt`, `zscore`, `days_from_last_change` | Không có |
 | | 23 ts_* operators | `d` (window), một số có `mode`, `driver`, `dense`, `k` |
 | | `hump` | `hump` (float) |
@@ -450,6 +455,7 @@ def ts_corr(x: str, y: str, d: int | None = None, *, distribution="balanced"):
 | | `tail` | `d`, `lower` (float), `upper` (float), `newval` (float) |
 | | `ts_target_tvr_decay`, `ts_target_tvr_hump` | `lambda_min` (float), `lambda_max` (float), `target_tvr` (float) |
 | | `winsorize` | `std` (float), `window` |
+| | `trade_when` (bucket `SELECT`) | `t1`, `t2` (float), `d1`, `d2` (window) |
 
 `config` chỉ chứa tham số **được sample hoặc truyền vào** — đủ để tái tạo bit-exact expression. Tham số cố định của operator (ví dụ `filter=true` của `add`/`multiply`/`subtract`) **không** nằm trong `config` vì chúng không đổi.
 
@@ -477,6 +483,12 @@ Các tham số ngẫu nhiên (`d`, `lag`, `rettype`, `std`, `hump`, v.v.) đư�
 | `d` | `WINDOW_STREAM = 1` | `WINDOW_DAYS = (1, 252)` | `"balanced"` | `ts_corr`, `ts_covariance`, `ts_regression` |
 | `rettype` | `RETTYPE_STREAM = 2` | `(0, 9)` | `"uniform"` | `ts_regression` |
 | `lag` | `LAG_STREAM = 3` | `(0, 5)` | `"uniform"` | `ts_regression` |
+| `s1`, `s2` | 1, 2 | `(1.0, 2.0)` | theo `distribution` | `if_else` |
+| `dx`, `dy` | 3, 4 | `(60, 252)` | theo `distribution` | `if_else` (xem dưới) |
+
+`if_else` dùng stream số thẳng trong hàm (1 đến 4), không dùng hằng `*_STREAM` của class, nên số 3 của `dx` trùng số của `LAG_STREAM`. Không xung đột vì `if_else` luôn gọi với `seed=None`; nếu sau này truyền seed cố định thì phải đổi thành hằng riêng.
+
+**`if_else` bọc `ts_rank` quanh operand.** Operand `x` (hoặc `y`) chưa bắt đầu bằng `ts_rank(`, `rank(`, `scale(`, `ts_scale(` thì được bọc `ts_rank(·, dx)` (hoặc `dy`), với `dx`, `dy` rút **độc lập** từ `[60, 252]`. Operand đã là rank operator thì giữ nguyên và **không** có `dx`/`dy` trong `config`. Trước đây window này là hằng 252, nên alpha `if_else` cũ không sinh lại giống hệt.
 
 **Distribution modes:**
 
@@ -546,6 +558,30 @@ expr2, _ = MatrixUnary.ts_mean("close", d=96)
 **9 operators không có parameters** (deterministic):
 `abs_`, `days_from_last_change`, `inverse`, `log`, `pasteurize`, `reverse`, `sign`, `sqrt`, `zscore`
 
+**`trade_when` (bucket `SELECT`, nằm trong `MatrixUnary`).** Một field `x`, dựng:
+
+```
+trade_when(ts_rank(x, d1) > t1, x, abs(ts_zscore(x, d2)) < t2)
+```
+
+Signature: `trade_when(x, t1=None, t2=None, d1=None, d2=None, *, distribution="balanced")`. `t1`, `t2` rút từ `[0, 0.1]`; `d1`, `d2` rút độc lập từ `[60, 252]`; cả bốn theo `distribution`. `config = {"t1", "t2", "d1", "d2"}`. Range `[60, 252]` do user chọn, **khác** `WINDOW_DAYS = (1, 252)` của các `ts_*` còn lại.
+
+### 8.7 `Vector` và `Group`
+
+**`Vector`** (7 operator `vec_*`): `Vector.get(name, x)`, không tham số rút, `config` luôn rỗng. Tên lạ thì `get` raise `ValueError`.
+
+**`Group`** (9 operator `group_*`): `Group.get(name, x, group, *, ...)`. Ngoài tham số riêng từng operator (`d`, `std`, `window` cho `group_backfill`; `weight_mode` cho `group_mean`), mọi operator có `mode` rút đều từ `{1..5}` quyết định cách dựng group:
+
+| `mode` | Group truyền vào operator |
+| --- | --- |
+| 1 | `group` nguyên gốc |
+| 2 | `densify(group)` |
+| 3 | `densify(bucket(rank(x), range=…, skipBoth=…, NaNGroup=…))` |
+| 4 | `densify(group_cartesian_product(bucket(rank(x), …), group))` |
+| 5 | **cùng chuỗi với mode 4** (xem §10.3) |
+
+`bucket` nhận `range='min, max, step'` rút từ `BUCKET_MIN_RANGE`, `BUCKET_MAX_RANGE`, `BUCKET_STEP_RANGE`, cộng hai cờ `skipBoth`, `NaNGroup` rút `{0, 1}`. `group_backfill` bọc `x` bằng `ts_rank(x, window)` trước khi dùng.
+
 ---
 
 ## 9. Giới hạn đã biết
@@ -556,4 +592,47 @@ expr2, _ = MatrixUnary.ts_mean("close", d=96)
 | Definition của operator so sánh (`equal`, `less`, …) là **không có ngoặc** | `OperatorTable.arg_names()` trả về rỗng → chúng không thể là SELECT. Đúng như mong muốn (chúng là BOOLEAN), nhưng là hệ quả chứ không phải thiết kế. |
 | Bảng không còn hiệu lực khi platform đổi operator | Không có timestamp. Xoá `cache/operators.csv` để fetch lại. |
 | `COMBO` và `SELECTION` scope chưa được phân loại | Tài liệu này chỉ phủ `REGULAR`. |
-| 6 buckets chưa có builder | `MATRIX_GENERATED`, `VARIADIC`, `SELECT`, `BOOLEAN`, `VECTOR`, `GROUP`, `GROUPING` — sinh expression tự động cho chúng là việc tiếp theo. |
+| 4 bucket chưa có builder (16 operator) | `MATRIX_GENERATED` (1), `VARIADIC` (2), `BOOLEAN` (10), `GROUPING` (3) — xem §10.2. |
+| `Group` mode 4 và mode 5 sinh **cùng một chuỗi** | Chưa sửa, xem §10.3. |
+
+---
+
+## 10. Giai đoạn 1 đã chốt, đầu vào cho giai đoạn 2
+
+Giai đoạn 1 là dựng **expression cơ bản**: mỗi operator có builder trả `(expression, profile)`, tham số rút ngẫu nhiên khi để `None` và replay được từ `config`. Trạng thái chốt ngày **2026-10-26**.
+
+### 10.1 Đã có builder: 68 / 84 operator
+
+| Class | Bucket | Số operator |
+| --- | --- | --- |
+| `MatrixBinary` | `MATRIX_BINARY` 10 + `SELECT` 1 (`if_else`) | 11 |
+| `MatrixUnary` | `MATRIX_UNARY` 40 + `SELECT` 1 (`trade_when`) | 41 |
+| `Vector` | `VECTOR` | 7 |
+| `Group` | `GROUP` | 9 |
+| | **Tổng** | **68** |
+
+Cách kiểm: chạy từng tên operator của CSV qua `get()` của class tương ứng; tên nào `get()` từ chối (`KeyError`/`ValueError`) thì tính là chưa có builder. `main.py` in một ví dụ cho mỗi builder (`if_else` trong vòng binary, `trade_when` trong vòng unary).
+
+### 10.2 Chưa có builder: 16 operator
+
+| Bucket | Số | Operator |
+| --- | --- | --- |
+| `MATRIX_GENERATED` | 1 | `ts_step` |
+| `VARIADIC` | 2 | `max`, `min` |
+| `BOOLEAN` | 10 | `and`, `equal`, `greater`, `greater_equal`, `is_nan`, `less`, `less_equal`, `not`, `not_equal`, `or` |
+| `GROUPING` | 3 | `bucket`, `densify`, `group_cartesian_product` |
+
+`bucket`, `densify`, `group_cartesian_product` đã xuất hiện **bên trong** expression do `Group` dựng (mode 2 đến 5), nhưng chưa có builder độc lập.
+
+### 10.3 Điểm lệch cần biết trước khi sang giai đoạn 2
+
+| # | Điểm lệch | Trạng thái |
+| --- | --- | --- |
+| 1 | `Group` mode 4 và mode 5 sinh **cùng một chuỗi** `densify(group_cartesian_product(bucket(...), group))`. Đã chạy trên 4 operator và đọc mã cả 9: mode 5 chỉ đổi chỗ đặt `densify`, kết quả giống mode 4. Hệ quả: `mode` rút đều `{1..5}` nhưng chỉ có 4 dạng expression khác nhau, dạng này chiếm 40% thay vì 20%. | **Chưa sửa.** Chưa rõ mode 5 định dựng gì khác; chờ quyết định. |
+| 2 | `profile["category"]` của `if_else`, `trade_when` là `MATRIX_BINARY`, `MATRIX_UNARY`, trong khi bảng §5 xếp chúng vào `SELECT`. | Chưa sửa. |
+| 3 | `if_else` (`dx`, `dy`) và `trade_when` (`d1`, `d2`) rút window từ `[60, 252]` viết thẳng trong hàm, khác `WINDOW_DAYS = (1, 252)` của các `ts_*`. | Theo yêu cầu user, chưa có hằng chung. |
+| 4 | `OperatorProfile.config` khai báo `dict[str, int \| bool]` nhưng thực tế chứa cả `float` và `str`. | Chưa sửa. |
+
+### 10.4 Giai đoạn 2
+
+Phạm vi giai đoạn 2 chưa được ghi ở file nào trong repo. Mục này để trống đến khi user chốt.

@@ -275,6 +275,7 @@ class MatrixBinary:
         builders={
             "add": MatrixBinary.add,
             "divide": MatrixBinary.divide,
+            "if_else": MatrixBinary.if_else,
             "multiply": MatrixBinary.multiply,
             "power": MatrixBinary.power,
             "signed_power": MatrixBinary.signed_power,
@@ -285,9 +286,9 @@ class MatrixBinary:
             "vector_neut": MatrixBinary.vector_neut,
         }
         builder=builders[name]
-        # Only the ts_* operators take a window, so only they take a
+        # Only the ts_* and if_else operators take a distribution, so only they take a
         # distribution; the rest would reject the keyword.
-        if name.startswith("ts_"):
+        if name.startswith("ts_") or name=="if_else":
             return builder(x, y, distribution=distribution)
         return builder(x, y)
 
@@ -514,6 +515,64 @@ class MatrixBinary:
             f"vector_neut({x}, {y})",
         )
 
+    @staticmethod
+    def if_else(
+        x: str,
+        y: str,
+        s1: float | None=None,
+        s2: float | None=None,
+        dx: int | None=None,
+        dy: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced"
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `if_else` expression: conditional selection based on weighted comparison.
+
+        Transforms x and y with ts_rank(*, dx) and ts_rank(*, dy) if not already starting
+        with rank operators.
+        Rank operators: ts_rank(, rank(, scale(, ts_scale(
+
+        Args:
+            x, y: operand expressions
+            s1, s2: weighting coefficients. If None, samples from [1.0, 2.0] with given distribution.
+            dx, dy: ts_rank windows wrapping x and y. If None, sampled independently from
+                [60, 252] with given distribution; unused when the operand is already ranked.
+            distribution: sampling strategy for s1, s2, dx, dy when None.
+
+        Condition: s1 * _x > s2 * _y
+        Returns _x if condition is truthy, else _y.
+        """
+        if s1 is None:
+            s1=FloatSampler.sample((1.0, 2.0), None, 1, distribution=distribution)
+        if s2 is None:
+            s2=FloatSampler.sample((1.0, 2.0), None, 2, distribution=distribution)
+
+        rank_ops=("ts_rank(", "rank(", "scale(", "ts_scale(")
+        config={"s1": s1, "s2": s2}
+        if x.startswith(rank_ops):
+            _x=x
+        else:
+            if dx is None:
+                dx=IntegerSampler.sample((60, 252), None, 3, distribution=distribution)
+            _x=f"ts_rank({x}, {dx})"
+            config["dx"]=dx
+        if y.startswith(rank_ops):
+            _y=y
+        else:
+            if dy is None:
+                dy=IntegerSampler.sample((60, 252), None, 4, distribution=distribution)
+            _y=f"ts_rank({y}, {dy})"
+            config["dy"]=dy
+
+        condition=f"{s1} * {_x} > {s2} * {_y}"
+        expression=f"if_else({condition}, {_x}, {_y})"
+
+        return MatrixBinary._profile(
+            "if_else",
+            config,
+            expression,
+        )
+
 
 class MatrixUnary:
     """The MATRIX_UNARY operators: one matrix field in, one matrix out.
@@ -606,6 +665,7 @@ class MatrixUnary:
             "sign": MatrixUnary.sign,
             "sqrt": MatrixUnary.sqrt,
             "tail": MatrixUnary.tail,
+            "trade_when": MatrixUnary.trade_when,
             "ts_arg_max": MatrixUnary.ts_arg_max,
             "ts_arg_min": MatrixUnary.ts_arg_min,
             "ts_av_diff": MatrixUnary.ts_av_diff,
@@ -633,7 +693,7 @@ class MatrixUnary:
         }
         builder=builders[name]
         # Operators that take a window parameter accept distribution; others ignore it.
-        if name.startswith("ts_") or name in ("kth_element", "last_diff_value", "tail", "winsorize"):
+        if name.startswith("ts_") or name in ("kth_element", "last_diff_value", "tail", "trade_when", "winsorize"):
             return builder(x, distribution=distribution)
         return builder(x)
 
@@ -876,6 +936,36 @@ class MatrixUnary:
             "tail",
             {"d": d, "lower": lower, "upper": upper, "newval": newval},
             f"tail(ts_rank({x}, {d}), lower={lower:.4f}, upper={upper:.4f}, newval={newval:.4f})",
+        )
+
+    @staticmethod
+    def trade_when(
+        x: str,
+        t1: float | None=None,
+        t2: float | None=None,
+        d1: int | None=None,
+        d2: int | None=None,
+        *,
+        distribution: Literal["uniform", "balanced"]="balanced",
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `trade_when` expression over one matrix field id.
+
+        Trigger is `ts_rank(x, d1) > t1`, value is `x`, exit is `abs(ts_zscore(x, d2)) < t2`.
+        Any of t1, t2, d1, d2 left as None is drawn with `distribution`: t1 and t2 from
+        [0, 0.1], d1 and d2 independently from [60, 252].
+        """
+        if t1 is None:
+            t1=FloatSampler.sample((0.0, 0.1), None, 1, distribution=distribution)
+        if t2 is None:
+            t2=FloatSampler.sample((0.0, 0.1), None, 2, distribution=distribution)
+        if d1 is None:
+            d1=IntegerSampler.sample((60, 252), None, 3, distribution=distribution)
+        if d2 is None:
+            d2=IntegerSampler.sample((60, 252), None, 4, distribution=distribution)
+        return MatrixUnary._profile(
+            "trade_when",
+            {"t1": t1, "t2": t2, "d1": d1, "d2": d2},
+            f"trade_when(ts_rank({x}, {d1}) > {t1}, {x}, abs(ts_zscore({x}, {d2})) < {t2})",
         )
 
     @staticmethod
