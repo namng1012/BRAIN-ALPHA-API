@@ -1336,3 +1336,569 @@ class MatrixUnary:
     def zscore(x: str) -> tuple[str, OperatorProfile]:
         """Build the `zscore` FASTEXPR over one matrix field id."""
         return MatrixUnary._profile("zscore", {}, f"zscore({x})")
+
+
+class Vector:
+    """The VECTOR operators: one matrix field in, one scalar out.
+
+    Every operator in this bucket consumes exactly one matrix field and
+    returns a scalar by reducing cross-sectional. No sampled parameters.
+    """
+
+    @staticmethod
+    def get(
+        name: str,
+        x: str,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the named VECTOR operator.
+
+        `name` is the operator name as the platform spells it, `x` is one
+        matrix field id.
+
+        Returns a tuple of (expression, profile) where expression is the
+        FASTEXPR string and profile contains category, name, and config.
+        """
+        builders={
+            "vec_avg": Vector.vec_avg,
+            "vec_count": Vector.vec_count,
+            "vec_max": Vector.vec_max,
+            "vec_min": Vector.vec_min,
+            "vec_range": Vector.vec_range,
+            "vec_stddev": Vector.vec_stddev,
+            "vec_sum": Vector.vec_sum,
+        }
+        if name not in builders:
+            raise ValueError(f"Unknown VECTOR operator: {name}")
+        return builders[name](x)
+
+    @staticmethod
+    def _profile(
+        name: str,
+        config: dict[str, int | bool | float | str],
+        expression: str,
+    ) -> tuple[str, OperatorProfile]:
+        """Assemble the expression and profile of one built operator call.
+
+        `config` holds the arguments that are not matrix fields and that the
+        draw produced. For VECTOR, config is always empty since no parameters
+        are sampled.
+
+        Returns a tuple of (expression, profile).
+        """
+        profile: OperatorProfile={
+            "category": "VECTOR",
+            "name": name,
+            "config": config,
+        }
+        return (expression, profile)
+
+    @staticmethod
+    def vec_avg(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `vec_avg` FASTEXPR over one matrix field."""
+        return Vector._profile("vec_avg", {}, f"vec_avg({x})")
+
+    @staticmethod
+    def vec_count(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `vec_count` FASTEXPR over one matrix field."""
+        return Vector._profile("vec_count", {}, f"vec_count({x})")
+
+    @staticmethod
+    def vec_max(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `vec_max` FASTEXPR over one matrix field."""
+        return Vector._profile("vec_max", {}, f"vec_max({x})")
+
+    @staticmethod
+    def vec_min(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `vec_min` FASTEXPR over one matrix field."""
+        return Vector._profile("vec_min", {}, f"vec_min({x})")
+
+    @staticmethod
+    def vec_range(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `vec_range` FASTEXPR over one matrix field."""
+        return Vector._profile("vec_range", {}, f"vec_range({x})")
+
+    @staticmethod
+    def vec_stddev(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `vec_stddev` FASTEXPR over one matrix field."""
+        return Vector._profile("vec_stddev", {}, f"vec_stddev({x})")
+
+    @staticmethod
+    def vec_sum(x: str) -> tuple[str, OperatorProfile]:
+        """Build the `vec_sum` FASTEXPR over one matrix field."""
+        return Vector._profile("vec_sum", {}, f"vec_sum({x})")
+
+
+class Group:
+    """The GROUP operators: bucket and group aggregation operations.
+    
+    This class builds GROUP operators with randomized bucket parameters
+    (min, max, step) and boolean flags (skipBoth, NaNGroup), each drawn on
+    its own entropy stream for reproducibility.
+    """
+    
+    # Entropy streams for bucket parameters and boolean flags
+    BUCKET_MIN_STREAM = 13
+    BUCKET_MAX_STREAM = 14
+    BUCKET_STEP_STREAM = 15
+    SKIP_BOTH_STREAM = 16
+    NAN_GROUP_STREAM = 17
+    
+    # Range bounds for bucket parameters
+    BUCKET_MIN_RANGE = (0.0, 0.8)
+    BUCKET_MAX_RANGE = (0.2, 1.0)
+    BUCKET_STEP_RANGE = (0.02, 0.15)
+    
+    @staticmethod
+    def get(
+        name: str,
+        x: str,
+        group: str,
+        *,
+        weight_mode: int | None = None,
+        mode: int | None = None,
+        d: int | None = None,
+        std: float | None = None,
+        window: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: Literal["uniform", "balanced"] = "balanced",
+    ) -> tuple[str, OperatorProfile]:
+        """Build the named GROUP operator.
+        
+        `name` is the operator name, `x` is the field, `group` is the grouping
+        field. For `group_mean`, `weight_mode` controls the weight expression.
+        Numeric parameters are drawn at random when left out, each on its own 
+        entropy stream.
+        
+        Returns a tuple of (expression, profile).
+        """
+        builders = {
+            "group_backfill": Group.group_backfill,
+            "group_count": Group.group_count,
+            "group_mean": Group.group_mean,
+            "group_neutralize": Group.group_neutralize,
+            "group_rank": Group.group_rank,
+            "group_scale": Group.group_scale,
+            "group_std_dev": Group.group_std_dev,
+            "group_sum": Group.group_sum,
+            "group_zscore": Group.group_zscore,
+        }
+        builder = builders[name]
+        if name == "group_mean":
+            return builder(
+                x, group,
+                mode=mode, weight_mode=weight_mode,
+                bucket_range=bucket_range, skip_both=skip_both, nan_group=nan_group,
+                distribution=distribution
+            )
+        else:
+            return builder(
+                x, group,
+                mode=mode, d=d, std=std, window=window,
+                bucket_range=bucket_range, skip_both=skip_both, nan_group=nan_group,
+                distribution=distribution
+            )
+    
+    @staticmethod
+    def _profile(
+        name: str,
+        config: dict[str, int | float | bool],
+        expression: str,
+    ) -> tuple[str, OperatorProfile]:
+        """Assemble the expression and profile of one built operator call."""
+        profile: OperatorProfile = {
+            "category": "GROUP",
+            "name": name,
+            "config": config,
+        }
+        return (expression, profile)
+    
+    @staticmethod
+    def _sample_bucket_params(
+        bucket_range: tuple[float, float, float] | None,
+        distribution: str,
+    ) -> tuple[float, float, float]:
+        """Sample or unpack bucket range parameters.
+        
+        Returns (bucket_min, bucket_max, bucket_step) with min < max guaranteed.
+        """
+        if bucket_range is None:
+            bucket_min = FloatSampler.sample(Group.BUCKET_MIN_RANGE, None, Group.BUCKET_MIN_STREAM, distribution=distribution)
+            bucket_max = FloatSampler.sample(Group.BUCKET_MAX_RANGE, None, Group.BUCKET_MAX_STREAM, distribution=distribution)
+            bucket_step = FloatSampler.sample(Group.BUCKET_STEP_RANGE, None, Group.BUCKET_STEP_STREAM, distribution=distribution)
+            bucket_min, bucket_max = min(bucket_min, bucket_max), max(bucket_min, bucket_max)
+        else:
+            bucket_min, bucket_max, bucket_step = bucket_range
+        return bucket_min, bucket_max, bucket_step
+    
+    @staticmethod
+    def _sample_flags(
+        skip_both: int | None,
+        nan_group: int | None,
+    ) -> tuple[str, str]:
+        """Sample or unpack boolean flags and convert to string representation."""
+        if skip_both is None:
+            skip_both = IntegerSampler.sample((0, 1), None, Group.SKIP_BOTH_STREAM, distribution="uniform")
+        if nan_group is None:
+            nan_group = IntegerSampler.sample((0, 1), None, Group.NAN_GROUP_STREAM, distribution="uniform")
+        
+        skip_both_bool = "True" if skip_both == 1 else "False"
+        nan_group_bool = "True" if nan_group == 1 else "False"
+        return skip_both_bool, nan_group_bool
+    
+    @staticmethod
+    def group_backfill(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        d: int | None = None,
+        std: float | None = None,
+        window: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_backfill` operator."""
+        if d is None:
+            d = IntegerSampler.sample((1, 252), None, 1, distribution=distribution)
+        if std is None:
+            std = FloatSampler.sample((0.01, 0.2), None, 2, distribution=distribution)
+        if window is None:
+            window = IntegerSampler.sample((1, 252), None, 12, distribution=distribution)
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 3, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        _x = f"ts_rank({x}, {window})"
+        
+        config = {"d": d, "std": f"{std:.2f}", "window": window, "mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_backfill({_x}, densify({group}), {d}, std = {std:.2f})"
+        elif mode == 3:
+            _group = f"bucket(rank({_x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_backfill({_x}, densify({_group}), {d}, std = {std:.2f})"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({_x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_backfill({_x}, densify({_group}), {d}, std = {std:.2f})"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({_x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_backfill({_x}, {_group}, {d}, std = {std:.2f})"
+        else:
+            expr = f"group_backfill({_x}, {group}, {d}, std = {std:.2f})"
+        
+        return Group._profile("group_backfill", config, expr)
+    
+    @staticmethod
+    def group_count(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_count` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 4, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_count({x}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_count({x}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_count({x}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_count({x}, {_group})"
+        else:
+            expr = f"group_count({x}, {group})"
+        
+        return Group._profile("group_count", config, expr)
+    
+    @staticmethod
+    def group_mean(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        weight_mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_mean` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 5, distribution="uniform")
+        
+        if weight_mode is None:
+            weight_mode = IntegerSampler.sample((1, 5), None, 18, distribution="uniform")
+        
+        weight_map = {
+            1: "1",
+            2: "cap",
+            3: "volume",
+            4: "volume/cap",
+            5: "ts_step(1)",
+        }
+        weight = weight_map[weight_mode]
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "weight_mode": weight_mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_mean({x}, {weight}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_mean({x}, {weight}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_mean({x}, {weight}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_mean({x}, {weight}, {_group})"
+        else:
+            expr = f"group_mean({x}, {weight}, {group})"
+        
+        return Group._profile("group_mean", config, expr)
+    
+    @staticmethod
+    def group_neutralize(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_neutralize` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 6, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_neutralize({x}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_neutralize({x}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_neutralize({x}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_neutralize({x}, {_group})"
+        else:
+            expr = f"group_neutralize({x}, {group})"
+        
+        return Group._profile("group_neutralize", config, expr)
+    
+    @staticmethod
+    def group_rank(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_rank` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 7, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_rank({x}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_rank({x}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_rank({x}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_rank({x}, {_group})"
+        else:
+            expr = f"group_rank({x}, {group})"
+        
+        return Group._profile("group_rank", config, expr)
+    
+    @staticmethod
+    def group_scale(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_scale` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 8, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_scale({x}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_scale({x}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_scale({x}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_scale({x}, {_group})"
+        else:
+            expr = f"group_scale({x}, {group})"
+        
+        return Group._profile("group_scale", config, expr)
+    
+    @staticmethod
+    def group_std_dev(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_std_dev` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 9, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_std_dev({x}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_std_dev({x}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_std_dev({x}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_std_dev({x}, {_group})"
+        else:
+            expr = f"group_std_dev({x}, {group})"
+        
+        return Group._profile("group_std_dev", config, expr)
+    
+    @staticmethod
+    def group_sum(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_sum` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 10, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_sum({x}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_sum({x}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_sum({x}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_sum({x}, {_group})"
+        else:
+            expr = f"group_sum({x}, {group})"
+        
+        return Group._profile("group_sum", config, expr)
+    
+    @staticmethod
+    def group_zscore(
+        x: str,
+        group: str,
+        *,
+        mode: int | None = None,
+        bucket_range: tuple[float, float, float] | None = None,
+        skip_both: int | None = None,
+        nan_group: int | None = None,
+        distribution: str = "balanced",
+        **kwargs,
+    ) -> tuple[str, OperatorProfile]:
+        """Build the `group_zscore` operator."""
+        if mode is None:
+            mode = IntegerSampler.sample((1, 5), None, 11, distribution="uniform")
+        
+        bucket_min, bucket_max, bucket_step = Group._sample_bucket_params(bucket_range, distribution)
+        skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
+        
+        config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        
+        if mode == 2:
+            expr = f"group_zscore({x}, densify({group}))"
+        elif mode == 3:
+            _group = f"bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool})"
+            expr = f"group_zscore({x}, densify({_group}))"
+        elif mode == 4:
+            _group = f"group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group})"
+            expr = f"group_zscore({x}, densify({_group}))"
+        elif mode == 5:
+            _group = f"densify(group_cartesian_product(bucket(rank({x}), range='{bucket_min:.4f}, {bucket_max:.4f}, {bucket_step:.4f}', skipBoth={skip_both_bool}, NaNGroup={nan_group_bool}), {group}))"
+            expr = f"group_zscore({x}, {_group})"
+        else:
+            expr = f"group_zscore({x}, {group})"
+        
+        return Group._profile("group_zscore", config, expr)

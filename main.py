@@ -4,8 +4,10 @@ from typing import Literal
 from Functions.cache import CATALOG_MAX_AGE_SECONDS
 from Functions.data import BrainData, CatalogBuilder
 from Functions.login import RELOGIN_THRESHOLD_SECONDS, BrainLogin
-from Functions.operators import OPERATORS_CSV_PATH, MatrixBinary, MatrixUnary, OperatorProfile, OperatorTable
+from Functions.operators import OPERATORS_CSV_PATH, MatrixBinary, MatrixUnary, Vector, Group, OperatorProfile, OperatorTable
 from Functions.random import FloatSampler, IntegerSampler
+
+
 
 
 
@@ -187,6 +189,32 @@ def main():
     ]:
         expression, profile = MatrixUnary.get(name, x)
         print(f"  {name:22s} {expression}")
+
+    # VECTOR operators: reduce cross-sectional vector to scalar.
+    print("\nVector expression examples")
+    # Sample vector field from VECTOR bucket
+    vec_x = builder.sample_field_ids(
+        scope["region"], scope["delay"], scope["universe"], "VECTOR", 1
+    )[0]
+    for name in ["vec_avg", "vec_count", "vec_max", "vec_min", "vec_range", "vec_stddev", "vec_sum"]:
+        expression, profile = Vector.get(name, vec_x)
+        print(f"  {name:22s} {expression}")
+
+    # GROUP operators: group-wise operations.
+    # Sample x from MATRIX, and group field from GROUP bucket.
+    group = builder.sample_field_ids(
+        scope["region"], scope["delay"], scope["universe"], "GROUP", 1
+    )[0]
+    print("\nGroup expression examples")
+    print(f"  group_backfill         {Group.get('group_backfill', x, group)[0]}")
+    print(f"  group_count            {Group.get('group_count', x, group)[0]}")
+    print(f"  group_mean             {Group.get('group_mean', x, group)[0]}")
+    print(f"  group_neutralize       {Group.get('group_neutralize', x, group)[0]}")
+    print(f"  group_rank             {Group.get('group_rank', x, group)[0]}")
+    print(f"  group_scale            {Group.get('group_scale', x, group)[0]}")
+    print(f"  group_std_dev          {Group.get('group_std_dev', x, group)[0]}")
+    print(f"  group_sum              {Group.get('group_sum', x, group)[0]}")
+    print(f"  group_zscore           {Group.get('group_zscore', x, group)[0]}")
 
 
 if __name__ == "__main__":
