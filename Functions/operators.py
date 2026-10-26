@@ -904,7 +904,7 @@ class MatrixUnary:
     def sqrt(x: str) -> tuple[str, OperatorProfile]:
         """Build the `sqrt` FASTEXPR over one matrix field id."""
         return MatrixUnary._profile(
-            "sqrt", {}, f"if_else(x >= 0, sqrt({x}), sign({x})*sqrt(abs({x})))"
+            "sqrt", {}, f"if_else({x} >= 0, sqrt({x}), sign({x})*sqrt(abs({x})))"
         )
 
     @staticmethod

@@ -1372,3 +1372,18 @@
 **Open questions:** GROUP có nên bị ràng buộc bởi theme không? Với theme này mọi expression GROUP dùng cùng một group field, và scope khác `USA_1_*` sẽ `IndexError` ở `[0]`.
 
 **Sentiment:** 5 — hoàn tất thay đổi trước, kèm phát hiện về pool GROUP.
+
+## 2026-10-26T13:49:34Z | chat-summary | score: 6
+
+**Request:** Liên hệ giữa lời gọi GROUP (`main.py` 205-207) và `scope = builder.scopes[0]`.
+
+**Outcome:**
+- Lời gọi GROUP dùng `scope` do dòng 113 gán (`builder.scopes[0]`, phần tử đầu của `config/scopes.yaml`), cùng với MATRIX và VECTOR; pool GROUP phụ thuộc scope này.
+- `builder.scopes[0]` hiện là `ASI_1_MINVOL10M` (lần chạy trước in `USA_1_TOPSP500`). Ở scope này GROUP dưới theme có 0 field nên `main.py` báo `IndexError` ở `[0]`.
+- Chưa sửa code.
+
+**Files touched:** none
+
+**Open questions:** Bỏ theme khỏi GROUP, thêm `other`/`pv` vào theme, hay cố định scope?
+
+**Sentiment:** 6 — xác nhận lỗi `IndexError` đã cảnh báo ở lượt trước.

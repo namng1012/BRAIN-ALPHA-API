@@ -20,7 +20,7 @@ def main():
 
     # categoryid values the field draws are restricted to (see
     # Docs/categoryid.md). Empty keeps the draw uniform over the whole catalog.
-    THEME = ["analyst", "model", "news"]
+    THEME = ["model"]
 
     # Master switch for reaching the platform. True may log in and refetch; False
     # keeps the run entirely on disk, reusing snapshots even after they age out.
@@ -110,7 +110,7 @@ def main():
     # scope, run through every builder so the printed FASTEXPR is exactly what
     # the platform would receive. The snapshot id is printed because
     # frame_id + scope is what pins the two field ids to one catalog snapshot.
-    scope = builder.scopes[-1]
+    scope = builder.scopes[-3]
     x, y = builder.sample_field_ids(
         scope["region"], scope["delay"], scope["universe"], "MATRIX", 2, theme=THEME
     )
