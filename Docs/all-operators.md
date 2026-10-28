@@ -546,6 +546,22 @@ expr3, _ = MatrixBinary.ts_regression("a", "b", seed=42)  # d=114, lag=3, rettyp
 
 Lưu ý: `seed` replay chỉ cố định được **stream 1** (window `d`) — các streams khác (`lag`, `rettype`) vẫn random. Để cố định tất cả, phải truyền tất cả parameters vào signature.
 
+**`replicate(profile, ...)` — replay từ profile, một hàm cho mỗi class.** Thay vì tự trải `config` ra keyword argument, mỗi class có `replicate` nhận chính `OperatorProfile` và toán hạng, rồi gọi lại builder với đúng `config` đã ghi:
+
+| Class | Signature | Ghi chú |
+| --- | --- | --- |
+| `MatrixBinary` | `replicate(profile, x, y)` | gọi `getattr(MatrixBinary, name)(x, y, **config)` |
+| `MatrixUnary` | `replicate(profile, x)` | đổi tên khoá `config` về tên tham số builder qua `CONFIG_PARAMETER`; bỏ `ignore` của `kth_element`; `abs` gọi `abs_` |
+| `Vector` | `replicate(profile, x)` | không có tham số rút |
+| `Group` | `replicate(profile, x, group)` | đổi `"True"/"False"` về 0/1, `std` về `float` |
+| `Variadic` | `replicate(profile, operands)` | giữ nguyên thứ tự operand |
+
+`MatrixUnary.CONFIG_PARAMETER` tồn tại vì `config` ghi một số tham số theo tên platform (`useStd`, `lookback`, `scale`, `longscale`, `shortscale`) trong khi builder dùng `use_std`, `d`, `book_size`, `long_scale`, `short_scale`. `kth_element` ghi `ignore` nhưng đó là hàm của `k`, builder tự suy ra nên `replicate` không truyền.
+
+`Group` mode 3, 4, 5 rút `bucket_range` (`[min, max, step]`) ngẫu nhiên. Trước đây nó **không** nằm trong `config`, nên replay ra text khác. Nay mọi `group_*` ghi `bucket_range` vào `config` khi `mode >= 3` (mode 1 và 2 không render nó). Expression sinh ra không đổi: snapshot 260 expression Group trước và sau sửa giống hệt.
+
+Replay cả một expression nhiều tầng từ profile của `ExpressionBuilder`: xem `Docs/expression-builder.md` §6.
+
 ### 8.6 `MatrixUnary` — 40 operators nhận 1 field
 
 Class `MatrixUnary` xử lý bucket `MATRIX_UNARY` (40 operators). Pattern giống hệt `MatrixBinary`:
@@ -597,7 +613,7 @@ Signature: `trade_when(x, t1=None, t2=None, d1=None, d2=None, *, distribution="b
 | 4 | `densify(group_cartesian_product(bucket(rank(x), …), group))` |
 | 5 | **cùng chuỗi với mode 4** (xem §10.3) |
 
-`bucket` nhận `range='min, max, step'` rút từ `BUCKET_MIN_RANGE`, `BUCKET_MAX_RANGE`, `BUCKET_STEP_RANGE`, cộng hai cờ `skipBoth`, `NaNGroup` rút `{0, 1}`. `group_backfill` bọc `x` bằng `ts_rank(x, window)` trước khi dùng.
+`bucket` nhận `range='min, max, step'` rút từ `BUCKET_MIN_RANGE`, `BUCKET_MAX_RANGE`, `BUCKET_STEP_RANGE`, cộng hai cờ `skipBoth`, `NaNGroup` rút `{0, 1}`. Với `mode >= 3`, `config` ghi thêm `bucket_range = [min, max, step]`; `skip_both` và `nan_group` được ghi dạng chuỗi `"True"`/`"False"`. `group_backfill` bọc `x` bằng `ts_rank(x, window)` trước khi dùng.
 
 ---
 
@@ -674,9 +690,12 @@ Bucket `BOOLEAN` không có builder vì phần lớn operator trong đó là **s
     "operators_per_category": {"MATRIX_UNARY": 3, "GROUP": 1, ...},
     "n_data_fields": 3,
     "n_distinct_operators": 5
-  }
+  },
+  "tree": { "level": ..., "operators": [...], "children": [...] }
 }
 ```
+
+**`tree`:** cây operator mà `ExpressionBuilder.replicate` đọc để dựng lại expression. `levels` chỉ gom operator theo tên nên không nói được operator nào bọc operator nào; `tree` giữ thông tin đó. Chi tiết ở `Docs/expression-builder.md` §5.4 và §6.
 
 **Ba tầng (`levels`):**
 
@@ -692,7 +711,7 @@ Bucket `BOOLEAN` không có builder vì phần lớn operator trong đó là **s
 
 1. **Số lần gọi trong profile ≠ số lần xuất hiện trong text.** Một số operator render lại argument của nó (`group_*` mode 3/4/5 nhúng `x` vào `bucket(rank(x))`; `trade_when` render 3 lần; `if_else` render operand 2 lần), nên text đếm *rendered occurrence* còn profile đếm *logical call*. Invariant đúng để verify profile là **coverage hai chiều theo tên operator**, không phải theo số lần.
 
-2. **`rank` của scale-fix không có trong profile.** Khi join dùng operator scale-sensitive (`add`, `subtract`, `multiply`, `signed_power`, `max`, `min`), generator bọc mỗi operand trong `rank(x)` để chúng cùng scale. Đó là **scaffolding bắt buộc để tạo lovel**, không phải lựa chọn của generator, nên nó không được ghi vào profile. Nếu có, nó sẽ chiếm ~40% lượt operator và làm mờ phần thông tin còn lại.
+2. **`rank` của scale-fix không có trong `levels`.** Khi join dùng operator scale-sensitive (`add`, `subtract`, `multiply`, `signed_power`, `max`, `min`), generator bọc mỗi operand trong `rank(x)` để chúng cùng scale. Đó là **scaffolding bắt buộc để hai operand cùng scale**, không phải lựa chọn của generator, nên nó không được ghi vào `levels`. Nếu có, nó sẽ chiếm ~40% lượt operator và làm mờ phần thông tin còn lại. Nó chỉ xuất hiện trong `tree` dưới dạng node `level = "rank"` không có operator, để `replicate` đặt lại đúng chỗ.
 
 ### 10.5 Giai đoạn 2
 

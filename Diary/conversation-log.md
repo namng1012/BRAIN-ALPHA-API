@@ -1735,3 +1735,108 @@
 **Open questions:** không đổi so với entry trước.
 
 **Sentiment:** 5 — breadcrumb xác nhận, không có quyết định mới.
+
+## 2026-10-28T17:47:35Z | chat-summary | score: 7
+
+**Request:** Cầm "profile" thì replicate lại expression thế nào; thêm một def cho MatrixBinary, MatrixUnary, Vector, Group và ExpressionBuilder.
+
+**Outcome:** Thêm `replicate` vào MatrixBinary, MatrixUnary, Vector, Group, Variadic và `ExpressionBuilder.replicate(profile)`. Profile có thêm key `tree`; config của Group có thêm `bucket_range`. 2880 expression (N=1..22) + 400 build sát limit: 0 mismatch, kể cả qua JSON round-trip.
+
+**Files touched:**
+- Functions/operators.py
+- main.py
+- Diary/conversation-log.md
+- Diary/code-technique.md
+- Diary/methodology.md
+
+**Open questions:** Docs/all-operators.md §8.5 chưa cập nhật mô tả replay; chờ user quyết định.
+
+**Sentiment:** 7 — thay đổi hình dạng profile, các bước sau sẽ dựa vào nó.
+
+## 2026-10-28T17:49:37Z | chat-summary | score: 4
+
+**Request:** Kết luận: có profile thì replicate lại expression được không.
+
+**Outcome:** Trả lời: được, với profile có key `tree` (build sau lần sửa). Nêu 4 giới hạn: profile cũ không dùng được, chỉ dựng chuỗi, mới test một scope, cần data.group.
+
+**Files touched:** Diary/conversation-log.md
+
+**Open questions:** Docs/all-operators.md §8.5 chưa cập nhật.
+
+**Sentiment:** 4 — breadcrumb xác nhận kết luận.
+
+## 2026-10-28T17:52:32Z | chat-summary | score: 3
+
+**Request:** Cuối main() thêm vài dòng cho thấy có profile thì generate expression thế nào.
+
+**Outcome:** Thêm 5 dòng sau khi in profile: JSON round-trip, `ExpressionBuilder.replicate`, in expression và so sánh với bản gốc.
+
+**Files touched:**
+- main.py
+- Diary/conversation-log.md
+
+**Open questions:** Docs/all-operators.md §8.5 chưa cập nhật.
+
+**Sentiment:** 3 — demo ngắn, không đổi logic.
+
+## 2026-10-28T17:53:13Z | chat-summary | score: 2
+
+**Request:** Tại sao phải dùng json.dumps (trong đoạn replicate cuối main()).
+
+**Outcome:** Giải thích: không bắt buộc; chỉ mô phỏng profile lưu ra file rồi đọc lại (tuple thành list, numpy thành str). Đề xuất có thể gọi replicate(profile) trực tiếp nếu muốn gọn.
+
+**Files touched:** Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 2 — giải thích ngắn, không đổi code.
+
+## 2026-10-28T17:54:03Z | chat-summary | score: 2
+
+**Request:** Đoạn replicate trong main() (dòng 710-719) có dư thừa không.
+
+**Outcome:** Có: bỏ json.dumps/json.loads và comment, gọi ExpressionBuilder.replicate(profile) trực tiếp. Chạy lại main.py, vẫn identical.
+
+**Files touched:**
+- main.py
+- Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 2 — cắt bớt code demo.
+
+## 2026-10-28T17:54:39Z | chat-summary | score: 1
+
+**Request:** Lệnh print(json.dumps(profile, indent=2, default=str)) làm gì.
+
+**Outcome:** Giải thích: dict profile thành chuỗi JSON, indent=2 để in dễ đọc, default=str đổi kiểu không serialize được (numpy, Timestamp) thành chuỗi.
+
+**Files touched:** Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 1 — giải thích, không đổi code.
+
+## 2026-10-28T18:05:01Z | chat-summary | score: 7 | tag: docs-expression-builder
+
+**Tags:** docs-expression-builder
+
+**Request:** Cập nhật Docs thật chi tiết và tường minh, và cả Diary.
+
+**Outcome:** Tạo `Docs/expression-builder.md` (9 mục): API, `draw_fields`, các tầng (leaf, join, scale-fix, variadic, post-wrap), ngân sách operator và level pool, profile (`data`, `levels`, `counts`, `tree`), replicate, tính ngẫu nhiên, hằng số, việc còn mở. Cập nhật `Docs/all-operators.md` (key `tree`, `rank` scale-fix chỉ nằm trong `tree`, bảng `replicate` theo class, `bucket_range`, `CONFIG_PARAMETER`) và trỏ từ `Docs/expression-search-experimental.md`. Đo lại trước khi ghi: 480 expression (n = 1..22) 0 mismatch replicate, kể cả JSON round-trip; n=22 vượt 64 operator ở 2/60 mẫu ở lần đo đầu nhưng 0/150 ở lần đo lại.
+
+**Files touched:**
+- Docs/expression-builder.md (mới)
+- Docs/all-operators.md
+- Docs/expression-search-experimental.md
+- Diary/conversation-log.md
+- Diary/code-technique.md
+- Diary/methodology.md
+
+**Open questions:**
+- Nguyên nhân n=22 vượt limit chưa xác minh; giả thuyết là kiểm tra khả thi không tính `vec_*` của lá VECTOR.
+- `_field_metadata` docstring nói giữ id và type, code chỉ giữ type khi không có metadata.
+- Docs/all-operators.md §10.4 và §10.5 chưa đổi ngoài các mục đã nêu; §10.5 (giai đoạn 2) vẫn để trống chờ user.
+- Chưa sửa code nào; chỉ đọc, đo và ghi tài liệu.
+
+**Sentiment:** 7 — tài liệu là nguồn đọc lại cho mọi bước sau, nên chênh lệch docstring/code và số đo n=22 được ghi tường minh thay vì làm tròn.

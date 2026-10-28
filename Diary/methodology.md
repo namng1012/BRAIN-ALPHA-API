@@ -642,3 +642,35 @@ Mọi operator trong text (kể cả rank của scale-fix) vào profile: bỏ v�
 **Impact on reported results:** verify bằng coverage hai chiều theo tên operator trên 200 expression ngẫu nhiên (N=1,2,3,6,12): 0 vi phạm. Trước khi thêm `implicit`, sai lệch là 87/100 expression — chủ yếu do `group_*` mode 3/4/5 (3/5 xác suất). Nếu reviewer hỏi "tại sao số operator trong profile ≠ số lần xuất hiện trong text", câu trả lời là operator lặp argument.
 
 **Sentiment:** 8 — quyết định về ranh giới "operator nào thuộc về profile" ảnh hưởng mọi thống kê tầng sau, và chỉ đúng khi invariant verify được.
+
+## 2026-10-28T17:47:35Z | methodology | score: 7
+
+**Decision:** Replay bit-exact bằng config đã ghi, không bằng seed. Ghi thêm `bucket_range` (chỉ mode 3-5) vào config của Group và `tree` vào profile.
+
+**Alternatives considered:**
+- Seed replay: Docs §8.5 nói chỉ cố định được stream 1; các stream khác vẫn random.
+- Parse lại text expression: dễ sai với implicit operator và tham số lặp.
+- Ghi bucket_range ở mọi mode: thừa, mode 1-2 không render nó.
+
+**Rationale:** config là nguồn sự thật duy nhất của tham số đã draw; cây cho cấu trúc.
+
+**Impact on reported results:** Expression sinh ra không đổi: snapshot 260 expression Group trước/sau sửa giống hệt. Chỉ profile đổi hình dạng (thêm `tree`, thêm `bucket_range`, level "rank").
+
+**Sentiment:** 7 — reviewer sẽ hỏi vì sao không dùng seed.
+
+## 2026-10-28T18:05:01Z | methodology | score: 6 | tag: docs-expression-builder
+
+**Tags:** docs-expression-builder
+
+**Decision:** Tài liệu hóa bộ sinh như một thiết bị đã đo (số mẫu, kết quả, độ lệch) và tách rõ ba loại phát biểu: đã đo, chưa kiểm (giả thuyết), lựa chọn thiết kế chưa tối ưu theo kết quả platform.
+
+**Alternatives considered:**
+- Ghi một con số duy nhất cho n=22: bỏ vì hai lần đo (2/60 và 0/150) mâu thuẫn nhau, một con số che mất sự bất định.
+- Ghi nguyên nhân n=22 như sự thật: bỏ vì chưa có phép đo xác nhận.
+- Sửa lỗi n=22 trong lượt này: bỏ vì yêu cầu chỉ là cập nhật tài liệu; sửa sẽ đổi hành vi sinh expression.
+
+**Rationale:** nhất quán với quy tắc không báo cáo kết luận chưa được kiểm chứng. Hằng số `VARIADIC_MAX_OPERANDS`, `VARIADIC_PROBABILITY`, `POST_WRAPPERS`, `max_wrappers` được ghi là lựa chọn thiết kế vì chưa có local oracle để so sánh chúng.
+
+**Impact on reported results:** không đổi code hay expression sinh ra. Nếu reviewer hỏi về tỉ lệ expression vượt giới hạn operator, số liệu hiện có là hiếm (khoảng 1% ở n=22, 0 ở n <= 20) nhưng chưa đủ mẫu để khẳng định.
+
+**Sentiment:** 6 — ranh giới giữa số đo và giả thuyết là thứ reviewer sẽ hỏi.

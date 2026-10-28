@@ -2,7 +2,7 @@
 
 **Trạng thái: ĐANG THỬ NGHIỆM**
 
-Tài liệu này ghi lại các hướng suy nghĩ ban đầu, không phải đặc tả đã chốt hay kết quả thực nghiệm. Chưa có implementation nào được đề xuất ở đây.
+Tài liệu này ghi lại các hướng suy nghĩ ban đầu, không phải đặc tả đã chốt hay kết quả thực nghiệm. Hai lever ở §2.2 đã được triển khai; mô tả bộ sinh hiện tại, profile và replicate nằm ở `Docs/expression-builder.md`.
 
 ## 1. Bài toán và điểm mù
 

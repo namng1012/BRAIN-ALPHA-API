@@ -791,3 +791,29 @@ Giờ caller có thể:
 **Reusable in:** bất kỳ hệ thống nào sinh rồi giải thích một biểu thức — nguyên tắc "profile đếm cái đã dựng, text đếm cái đã render, hai thứ khác nhau ở operator lặp argument" áp dụng cho mọi IR/query planner.
 
 **Sentiment:** 8 — invariant phải chọn đúng mới verify được; đếm số lần sẽ báo động giả âm và che mất lỗi thật.
+
+## 2026-10-28T17:47:35Z | code-technique | score: 8
+
+**Where:** Functions/operators.py (`*.replicate`, `MatrixUnary.CONFIG_PARAMETER`, `Group.replicate`); main.py `ExpressionBuilder.replicate/_replay/_apply/_tree_profile`
+
+**Pattern:** replay từ cây profile, không từ `levels`
+
+**Why:** `levels` gom operator theo tên nên mất thông tin "ai bọc ai" và thứ tự toán hạng; replay cần cây. Probe 21000 lời gọi cho thấy 3 chỗ config không replay được: (1) `config` ghi tên platform (`useStd`, `lookback`, `scale`, `longscale`, `shortscale`) khác tên tham số builder; (2) `kth_element` ghi `ignore` là hàm của `k`, không phải tham số; (3) Group mode 3-5 vẽ `bucket_range` ngẫu nhiên nhưng không ghi vào config, nên text khác sau replay. Ngoài ra flags Group lưu dạng "True"/"False" và `std` dạng chuỗi 2 chữ số, replicate phải đổi ngược. Nhánh fallback của `build` trước đây truyền tree=None nên profile rỗng; nay giữ tree nhỏ nhất. Node `rank` scaffolding có level riêng "rank" (không operator) để replay đặt lại đúng.
+
+**Reusable in:** mọi nơi cần serialize rồi dựng lại một biểu thức sinh ngẫu nhiên.
+
+**Sentiment:** 8 — non-obvious, ngăn một lỗi im lặng (replay ra expression khác mà không báo).
+
+## 2026-10-28T18:05:01Z | code-technique | score: 5 | tag: docs-expression-builder
+
+**Tags:** docs-expression-builder
+
+**Where:** Docs/expression-builder.md §4.1, §5.1
+
+**Pattern:** đo lại một kết quả bất thường trước khi ghi nguyên nhân vào tài liệu
+
+**Why:** lần đo đầu cho n=22 vượt 64 operator ở 2/60 mẫu, tôi đã viết một lời giải thích. Đo lại 150 mẫu cho 0 vượt, nên lời giải thích đó không còn đứng được như một kết luận. Tài liệu giờ ghi cả hai số đo và đánh dấu nguyên nhân là giả thuyết chưa kiểm. Tương tự, đọc code thay vì tin docstring cho thấy `_field_metadata` không giữ `fieldid` khi thiếu metadata.
+
+**Reusable in:** mọi phần Docs có con số đo; kèm cỡ mẫu và đánh dấu giả thuyết chưa kiểm.
+
+**Sentiment:** 5 — kỷ luật ghi chép, không phải kỹ thuật mới.

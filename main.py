@@ -230,8 +230,8 @@ class ExpressionBuilder:
                 f"platform's limit of {self.OPERATOR_LIMIT}."
             )
 
-        # The smallest expression the pools allow, kept as the fallback when no
-        # level fits the limit.
+        # The smallest tree the pools allow, kept as the fallback when no level
+        # fits the limit.
         smallest = None
         for pools in self.levels:
             allowance = max(1, (self.OPERATOR_LIMIT - self.JOIN_COST * (n - 1)) // n)
@@ -247,13 +247,13 @@ class ExpressionBuilder:
                     return expression, self._profile(
                         expression, post, field_ids, field_types, field_meta
                     )
-                if smallest is None or self.operator_count(expression) < self.operator_count(smallest):
-                    smallest = expression
+                if smallest is None or self.operator_count(expression) < self.operator_count(smallest["expression"]):
+                    smallest = tree
                 if allowance == 1:
                     break
                 allowance //= 2
-        return smallest, self._profile(
-            smallest, None, field_ids, field_types, field_meta
+        return smallest["expression"], self._profile(
+            smallest["expression"], smallest, field_ids, field_types, field_meta
         )
 
     def _profile(self, expression, tree, field_ids, field_types, field_meta):
@@ -268,6 +268,9 @@ class ExpressionBuilder:
           the join stage and the stage on top of the joined tree. Each level
           maps an operator name to the profiles of the calls that used it.
         - `counts`: what follows from the two parts above.
+        - `tree`: the expression as a tree of those operators, which is what
+          `replicate` rebuilds the expression from. `levels` only groups the
+          operators by name, so it cannot say which operator wraps which.
 
         The tree is walked rather than the rendered text parsed, so the profile
         holds exactly the operators that were built, with the configuration
@@ -275,8 +278,7 @@ class ExpressionBuilder:
         """
         operators_by_level = {"leaf": {}, "join": {}, "post": {}}
         fields = []
-        if tree is not None:
-            self._walk(tree, operators_by_level, fields)
+        self._walk(tree, operators_by_level, fields)
 
         return {
             "expression": expression,
@@ -290,7 +292,60 @@ class ExpressionBuilder:
                 for level, calls_by_name in operators_by_level.items()
             },
             "counts": self._counts(operators_by_level, fields),
+            "tree": self._tree_profile(tree),
         }
+
+    @staticmethod
+    def replicate(profile):
+        """Rebuild the expression `profile` describes, drawing nothing.
+
+        Every operator call is rebuilt from the configuration recorded in
+        `profile["tree"]` (see `_profile`), over the operands the tree gives it,
+        so the result is the original expression character for character. The
+        profile may come straight from `build` or from a JSON round-trip of it.
+        """
+        group = profile["data"]["group"]
+        group_id = None if group is None else group["fieldid"]
+        return ExpressionBuilder._replay(profile["tree"], group_id)
+
+    @staticmethod
+    def _replay(node, group_id):
+        if node["level"] == "rank":
+            return f"rank({ExpressionBuilder._replay(node['children'][0], group_id)})"
+        operands = [ExpressionBuilder._replay(child, group_id) for child in node["children"]]
+        if node["level"] == "join":
+            return ExpressionBuilder._apply(node["operators"][0], operands, group_id)
+        # A leaf starts from its field id; a post node from the joined tree.
+        expression = node["field"]["fieldid"] if node["level"] == "leaf" else operands[0]
+        for operator in node["operators"]:
+            expression = ExpressionBuilder._apply(operator, [expression], group_id)
+        return expression
+
+    @staticmethod
+    def _apply(operator, operands, group_id):
+        category = operator["category"]
+        if category == "MATRIX_BINARY":
+            expression, _ = MatrixBinary.replicate(operator, *operands)
+        elif category == "VARIADIC":
+            expression, _ = Variadic.replicate(operator, operands)
+        elif category == "VECTOR":
+            expression, _ = Vector.replicate(operator, *operands)
+        elif category == "MATRIX_UNARY":
+            expression, _ = MatrixUnary.replicate(operator, *operands)
+        else:
+            expression, _ = Group.replicate(operator, *operands, group_id)
+        return expression
+
+    def _tree_profile(self, node):
+        """The node and everything under it, keeping only what `replicate` reads."""
+        out = {
+            "level": node["level"],
+            "operators": [dict(operator) for operator in node["operators"]],
+            "children": [self._tree_profile(child) for child in node["children"]],
+        }
+        if node.get("field") is not None:
+            out["field"] = dict(node["field"])
+        return out
 
     def _walk(self, node, operators_by_level, fields):
         """Collect the operators and the fields of one subtree into the profile.
@@ -490,7 +545,7 @@ class ExpressionBuilder:
         """
         return {
             "expression": f"rank({node['expression']})",
-            "level": "join",
+            "level": "rank",
             "operators": [],
             "children": [node],
         }
@@ -638,7 +693,7 @@ def main():
 
     # n leaves need n-1 joins, which eats the operator budget: at n=60 only
     # 5 operators remain and the expression degenerates into a bare `add` chain.
-    FIELD_COUNTS = (2,)
+    FIELD_COUNTS = (20,)
     for n in FIELD_COUNTS:
         field_types, field_ids, drawn = expressions.draw_fields(n)
         if not field_ids:
@@ -654,6 +709,11 @@ def main():
         print(f"  {expression}")
         print(" profile:")
         print(json.dumps(profile, indent=2, default=str))
+
+        replicated = ExpressionBuilder.replicate(profile)
+        print("  replicated from profile:")
+        print(f"  {replicated}")
+        print(f"  identical to the original: {replicated == expression}")
 
 
 if __name__ == "__main__":

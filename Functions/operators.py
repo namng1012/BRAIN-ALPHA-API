@@ -326,6 +326,20 @@ class MatrixBinary:
         return builder(x, y)
 
     @staticmethod
+    def replicate(
+        profile: OperatorProfile,
+        x: str,
+        y: str,
+    ) -> tuple[str, OperatorProfile]:
+        """Rebuild the call `profile` describes over the operands `x` and `y`.
+
+        Every argument the original call drew sits in `profile["config"]`, so
+        nothing is drawn again: the same profile and operands give the same
+        expression.
+        """
+        return getattr(MatrixBinary, profile["name"])(x, y, **profile["config"])
+
+    @staticmethod
     def _profile(
         name: str,
         config: dict[str, int | bool],
@@ -649,6 +663,14 @@ class Variadic:
         return builders[name](operands)
 
     @staticmethod
+    def replicate(
+        profile: OperatorProfile,
+        operands: list[str],
+    ) -> tuple[str, OperatorProfile]:
+        """Rebuild the call `profile` describes over `operands`, in that order."""
+        return Variadic.get(profile["name"], operands)
+
+    @staticmethod
     def _profile(
         name: str,
         config: dict[str, int | bool | float | str],
@@ -810,6 +832,35 @@ class MatrixUnary:
         if name.startswith("ts_") or name in ("kth_element", "last_diff_value", "tail", "trade_when", "winsorize"):
             return builder(x, distribution=distribution)
         return builder(x)
+
+    # `config` records some arguments under the platform's own spelling, which
+    # is not the builder's parameter name.
+    CONFIG_PARAMETER={
+        "useStd": "use_std",
+        "lookback": "d",
+        "scale": "book_size",
+        "longscale": "long_scale",
+        "shortscale": "short_scale",
+    }
+
+    @staticmethod
+    def replicate(profile: OperatorProfile, x: str) -> tuple[str, OperatorProfile]:
+        """Rebuild the call `profile` describes over `x`.
+
+        Every argument the original call drew sits in `profile["config"]`, so
+        nothing is drawn again: the same profile and operand give the same
+        expression.
+        """
+        name=profile["name"]
+        # `kth_element` records `ignore` next to `k`, but `ignore` is a function
+        # of `k`: the builder derives it, so it is not a parameter.
+        config={
+            MatrixUnary.CONFIG_PARAMETER.get(key, key): value
+            for key, value in profile["config"].items()
+            if not (name=="kth_element" and key=="ignore")
+        }
+        builder=getattr(MatrixUnary, "abs_" if name=="abs" else name)
+        return builder(x, **config)
 
     @staticmethod
     def _profile(
@@ -1591,6 +1642,11 @@ class Vector:
         return builders[name](x)
 
     @staticmethod
+    def replicate(profile: OperatorProfile, x: str) -> tuple[str, OperatorProfile]:
+        """Rebuild the call `profile` describes over `x`. VECTOR draws nothing."""
+        return Vector.get(profile["name"], x)
+
+    @staticmethod
     def _profile(
         name: str,
         config: dict[str, int | bool | float | str],
@@ -1724,6 +1780,28 @@ class Group:
             )
     
     @staticmethod
+    def replicate(
+        profile: OperatorProfile,
+        x: str,
+        group: str,
+    ) -> tuple[str, OperatorProfile]:
+        """Rebuild the call `profile` describes over `x`, grouped by `group`.
+
+        Every argument the original call drew sits in `profile["config"]`, so
+        nothing is drawn again. The flags are recorded as the strings the
+        expression carries ("True"/"False") and the builder takes them as 0/1;
+        `std` is recorded as the two-decimal string the expression carries.
+        `bucket_range` is only recorded for modes 3-5, the modes that render it;
+        the other modes never read it.
+        """
+        config = dict(profile["config"])
+        config["skip_both"] = int(config["skip_both"] == "True")
+        config["nan_group"] = int(config["nan_group"] == "True")
+        if "std" in config:
+            config["std"] = float(config["std"])
+        return Group.get(profile["name"], x, group, **config)
+
+    @staticmethod
     def _profile(
         name: str,
         config: dict[str, int | float | bool],
@@ -1824,6 +1902,8 @@ class Group:
         _x = f"ts_rank({x}, {window})"
         
         config = {"d": d, "std": f"{std:.2f}", "window": window, "mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         
         if mode == 2:
             expr = f"group_backfill({_x}, densify({group}), {d}, std = {std:.2f})"
@@ -1866,6 +1946,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         
         if mode == 2:
             expr = f"group_count({x}, densify({group}))"
@@ -1921,7 +2003,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "weight_mode": weight_mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
-        
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         if mode == 2:
             expr = f"group_mean({x}, {weight}, densify({group}))"
         elif mode == 3:
@@ -1963,7 +2046,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
-        
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         if mode == 2:
             expr = f"group_neutralize({x}, densify({group}))"
         elif mode == 3:
@@ -2005,7 +2089,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
-        
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         if mode == 2:
             expr = f"group_rank({x}, densify({group}))"
         elif mode == 3:
@@ -2047,7 +2132,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
-        
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         if mode == 2:
             expr = f"group_scale({x}, densify({group}))"
         elif mode == 3:
@@ -2089,7 +2175,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
-        
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         if mode == 2:
             expr = f"group_std_dev({x}, densify({group}))"
         elif mode == 3:
@@ -2131,7 +2218,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
-        
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         if mode == 2:
             expr = f"group_sum({x}, densify({group}))"
         elif mode == 3:
@@ -2173,7 +2261,8 @@ class Group:
         skip_both_bool, nan_group_bool = Group._sample_flags(skip_both, nan_group)
         
         config = {"mode": mode, "skip_both": skip_both_bool, "nan_group": nan_group_bool}
-        
+        if mode >= 3:
+            config["bucket_range"] = [bucket_min, bucket_max, bucket_step]
         if mode == 2:
             expr = f"group_zscore({x}, densify({group}))"
         elif mode == 3:
