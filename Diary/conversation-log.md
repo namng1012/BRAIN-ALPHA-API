@@ -1840,3 +1840,73 @@
 - Chưa sửa code nào; chỉ đọc, đo và ghi tài liệu.
 
 **Sentiment:** 7 — tài liệu là nguồn đọc lại cho mọi bước sau, nên chênh lệch docstring/code và số đo n=22 được ghi tường minh thay vì làm tròn.
+
+## 2026-10-28T18:30:18Z | chat-summary | score: 8 | tag: scope-as-filter
+
+**Tags:** scope-as-filter
+
+**Request:** Region, delay, universe cũng phải dùng để filter như theme (định nghĩa của BRAIN); test độ phong phú của việc chọn bộ data khi đổi các đại lượng này.
+
+**Outcome:** Đo trên cache 41 scope (snapshot fetch 2026-10-22, MIN_COVERAGE=0.7), không sửa code. Kết quả: (1) region là trục đổi field mạnh nhất (Jaccard USA vs vùng khác <= 0.16); (2) delay đổi cả kích thước lẫn tập field (USA d0 8798 id, d1 46022 id, d0 không là tập con của d1); (3) universe gần như không đổi tập field (19 catalog khác nhau trên 41 scope); (4) THEME=['fundamental','model'] tắt group_* ở 39/41 scope vì theme cũng lọc GROUP field.
+
+**Files touched:**
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:**
+- Đo chỉ trên tập field id, không đo hành vi tín hiệu: universe đổi tập cổ phiếu nên giá trị field khác dù id giống.
+- Có nên đưa region/delay/universe vào bộ lọc cùng theme, và theme có nên bỏ qua GROUP field.
+- Chọn scope đều trên 41 scope hay trên 19 catalog khác nhau.
+
+**Sentiment:** 8 — quyết định cách chọn scope ảnh hưởng toàn bộ không gian field mà generator thấy.
+
+## 2026-10-28T18:47:29Z | chat-summary | score: 8 | tag: scope-as-filter
+
+**Tags:** scope-as-filter
+
+**Request:** Theme áp cho cả 3 type (MATRIX/VECTOR/GROUP). Scope chỉ lọc theo REGION, quản lý như THEME; REGION rỗng thì random trong mọi region.
+
+**Outcome:** Thêm hằng REGION = ['USA', 'EUR'] cạnh THEME trong main(). Scope được rút 2 bước: region trong danh sách (hoặc cả 11 region nếu rỗng), rồi một scope trong region đó; delay và universe không lọc. Thay scopes[-3] cố định. THEME giữ nguyên, áp cho cả 3 type.
+
+**Files touched:**
+- main.py
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:**
+- Theme áp cho GROUP làm group_* tắt ở 39/41 scope với THEME = ['fundamental', 'model']; user chọn giữ.
+- Docs/expression-builder.md chưa nhắc REGION.
+- _probe_main.py chưa theo dõi trong repo, không phải của lượt này.
+
+**Sentiment:** 8 — đổi không gian scope mà generator thấy, từ 1 scope cố định sang rút theo region.
+
+## 2026-10-28T18:52:11Z | chat-summary | score: 4 | tag: scope-as-filter
+
+**Tags:** scope-as-filter
+
+**Request:** Chạy lại test lọc REGION qua main() sau khi lần trước bị hủy.
+
+**Outcome:** Chạy main() 133 lần trên bản sao có REGION thay đổi, không sửa main.py. ['GLB'] chỉ ra GLB_1; ['USA'] chỉ ra USA (d0 12, d1 8); ['USA','EUR'] chỉ ra USA và EUR; [] ra đủ 11 region. REGION=['XXX'] lỗi ValueError từ IntegerSampler vì không có scope nào khớp, chưa xử lý.
+
+**Files touched:**
+- Diary/conversation-log.md
+
+**Open questions:**
+- Region không tồn tại cho lỗi khó đọc; chưa thêm validation vì chưa được yêu cầu.
+- main.py đang để REGION = ['GLB'].
+
+**Sentiment:** 4 — xác nhận hành vi đã có, kèm một cạnh lỗi nhỏ.
+
+## 2026-10-28T19:04:16Z | chat-summary | score: 2
+
+**Request:** Xóa _probe_main.py vì dư thừa.
+
+**Outcome:** Đã xóa _probe_main.py (bản sao main.py thử lọc REGION/DELAY/UNIVERSE, untracked, không được import). main.py giữ nguyên.
+
+**Files touched:**
+- _probe_main.py (deleted)
+- Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 2 — dọn file thừa.

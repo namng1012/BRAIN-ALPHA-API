@@ -674,3 +674,45 @@ Mọi operator trong text (kể cả rank của scale-fix) vào profile: bỏ v�
 **Impact on reported results:** không đổi code hay expression sinh ra. Nếu reviewer hỏi về tỉ lệ expression vượt giới hạn operator, số liệu hiện có là hiếm (khoảng 1% ở n=22, 0 ở n <= 20) nhưng chưa đủ mẫu để khẳng định.
 
 **Sentiment:** 6 — ranh giới giữa số đo và giả thuyết là thứ reviewer sẽ hỏi.
+
+## 2026-10-28T18:30:18Z | methodology | score: 8 | tag: scope-as-filter
+
+**Tags:** scope-as-filter
+
+**Decision:** Chưa đổi code. Ghi lại số đo độ phong phú của không gian field theo từng trục scope, làm cơ sở cho quyết định coi region/delay/universe như bộ lọc.
+
+**Alternatives considered:**
+- Chọn scope đều trên 41 scope: thiên về USA (12) và EUR (10) vốn trùng catalog bên trong vùng; 19 catalog khác nhau.
+- Chọn đều theo (region, delay) hoặc theo 19 catalog khác nhau: cân bằng hơn về field, nhưng bỏ qua khác biệt universe về tập cổ phiếu mà phép đo này không thấy.
+- Chỉ dùng USA_1: pool lớn nhất (36854 MATRIX) nhưng một vùng duy nhất.
+
+**Rationale:** số đo (cache 2026-10-22, MIN_COVERAGE=0.7, MATRIX+VECTOR theo fieldid):
+- Universe: cùng region+delay, Jaccard nhỏ nhất 0.9247 (ASI), 1.0 ở EUR/GLB/HKG/TWN, 0.9785 ở USA d1.
+- Delay: cùng region+universe, Jaccard 0.05 đến 0.17; d0-only 2203 id ở USA.
+- Region (delay 1): USA vs vùng khác 0.03 đến 0.16; cụm ASI/HKG/KOR/TWN 0.55 đến 0.74; DEU/GBR 0.75.
+- Hợp 41 scope 78059 id, scope lớn nhất 46022; 0 id có mặt ở cả 41 scope, 8603 id chỉ có ở 1 scope.
+- Kích thước MATRIX min 137, median 7566, max 36854 (gấp 269 lần).
+- Số category hiệu dụng (exp entropy, MATRIX, rút đều): min 1.51 (DEU_0, GBR_0: analyst 90%), median 4.41, max 6.19.
+
+**Impact on reported results:** scope được chọn quyết định pool và phân phối category; main.py hiện cố định scopes[-3] = USA_1_TOP3000, scope giàu nhất. Kết quả trên scope này không suy ra được cho vùng khác.
+
+**Latent behaviour found, not fixed:** theme được áp lên cả GROUP field (_pool_size và _sample). GROUP chỉ có category pv (39 scope), other (25), model (6). THEME=['fundamental','model'] đưa GROUP về 0 hoặc 1 field ở cả 41 scope, dưới MIN_POOL_SIZE nên group_* bị tắt ở 39 scope (2 scope còn lại vốn không đủ GROUP). Cần quyết định của user: theme có nên chỉ áp cho MATRIX/VECTOR.
+
+**Sentiment:** 8 — universe gần như không thêm field trong khi bị đếm như 41 lựa chọn, và theme hiện tắt cả một họ operator mà không báo.
+
+## 2026-10-28T18:47:29Z | methodology | score: 8 | tag: scope-as-filter
+
+**Tags:** scope-as-filter
+
+**Decision:** Scope được rút bằng 2 bước: region đều trong REGION (rỗng = cả 11 region), rồi scope đều trong region đó. Theme áp cho cả MATRIX, VECTOR, GROUP.
+
+**Alternatives considered:**
+- Rút đều trên 41 scope: USA 12 và EUR 10 chiếm 22/41 dù chỉ có 2 catalog khác nhau mỗi vùng theo delay.
+- Rút đều trên 19 catalog khác nhau: cân bằng về field, bị loại vì user chỉ muốn lọc theo region.
+- Theme chỉ áp cho MATRIX/VECTOR: bị loại theo quyết định của user.
+
+**Rationale:** user muốn quản lý region như THEME, danh sách do user viết. Rút region trước rồi mới rút scope giữ cho mỗi region cùng xác suất; đo 11000 lần: REGION rỗng cho mỗi region 960 đến 1059 lần, ['USA','EUR'] cho 5425/5575. Trong region, delay và universe được rút đều, nên với USA delay 0 và delay 1 có xác suất ngang nhau (6 scope mỗi delay) dù pool delay 0 nhỏ hơn nhiều (MATRIX 6498 so với 36854).
+
+**Impact on reported results:** mỗi lần chạy main thấy một scope ngẫu nhiên thay vì USA_1_TOP3000, nên số liệu giữa các lần chạy không so sánh trực tiếp. Với THEME = ['fundamental', 'model'], GROUP còn 0 hoặc 1 field ở hầu hết scope, group_* tắt, và pool delay 0 nhỏ hơn rõ (USA_0 MATRIX 1634 so với USA_1 17096).
+
+**Sentiment:** 8 — quyết định ai được thấy field nào, reviewer sẽ hỏi vì sao delay 0 và 1 có trọng số bằng nhau.

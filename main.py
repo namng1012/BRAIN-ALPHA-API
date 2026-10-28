@@ -591,7 +591,12 @@ def main():
 
     # categoryid values the field draws are restricted to (see
     # Docs/categoryid.md). Empty keeps the draw uniform over the whole catalog.
-    THEME = []
+    THEME = ['fundamental', 'model']
+
+    # Region codes the scope is drawn from (see config/scopes.yaml). Empty draws
+    # the region uniformly over every region. Delay and universe are not
+    # filtered: they are drawn at random inside the chosen region.
+    REGION = ['GLB']
 
     # Master switch for reaching the platform. True may log in and refetch; False
     # keeps the run entirely on disk, reusing snapshots even after they age out.
@@ -681,7 +686,12 @@ def main():
     # scope, run through every builder so the printed FASTEXPR is exactly what
     # the platform would receive. The snapshot id is printed because
     # frame_id + scope is what pins the two field ids to one catalog snapshot.
-    scope = builder.scopes[-3]
+    # The region is drawn first, then the scope inside it, so a region with many
+    # scopes (USA 12, EUR 10) is not favoured over one with a single scope.
+    regions = REGION or sorted({s["region"] for s in builder.scopes})
+    region = regions[IntegerSampler.sample((0, len(regions) - 1))]
+    in_region = [s for s in builder.scopes if s["region"] == region]
+    scope = in_region[IntegerSampler.sample((0, len(in_region) - 1))]
 
     expressions = ExpressionBuilder(builder, scope, THEME)
     print(f"\nPool in {builder.cache.key(scope)} (theme={THEME}): {expressions.pools}")
@@ -693,7 +703,7 @@ def main():
 
     # n leaves need n-1 joins, which eats the operator budget: at n=60 only
     # 5 operators remain and the expression degenerates into a bare `add` chain.
-    FIELD_COUNTS = (20,)
+    FIELD_COUNTS = (1,)
     for n in FIELD_COUNTS:
         field_types, field_ids, drawn = expressions.draw_fields(n)
         if not field_ids:
@@ -707,13 +717,13 @@ def main():
         print(drawn[["fieldid", "type", "categoryid", "coverage"]].to_string(index=False))
         print(f"  expression ({len(expression)} chars, {profile['operator_count']} operators):")
         print(f"  {expression}")
-        print(" profile:")
-        print(json.dumps(profile, indent=2, default=str))
+        # print(" profile:")
+        # print(json.dumps(profile, indent=2, default=str))
 
-        replicated = ExpressionBuilder.replicate(profile)
-        print("  replicated from profile:")
-        print(f"  {replicated}")
-        print(f"  identical to the original: {replicated == expression}")
+        # replicated = ExpressionBuilder.replicate(profile)
+        # print("  replicated from profile:")
+        # print(f"  {replicated}")
+        # print(f"  identical to the original: {replicated == expression}")
 
 
 if __name__ == "__main__":
