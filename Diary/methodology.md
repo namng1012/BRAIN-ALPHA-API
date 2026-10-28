@@ -484,3 +484,144 @@ Nếu không có pattern này, pipeline chỉ có thể sinh alpha mới, không
 **Impact on reported results:** Mọi expression GROUP trong run dùng cùng một group field; kết quả group-wise không đại diện cho đa dạng group của catalog.
 
 **Sentiment:** 7 — thu hẹp mạnh không gian group field, reviewer sẽ hỏi.
+
+## 2026-10-26T15:54:54Z | methodology | score: 8
+
+**Decision:** (đang chờ user chốt) Dùng `distribution="uniform"` cho bốc kiểu field MATRIX/VECTOR.
+
+**Alternatives considered:**
+- `"balanced"` (mặc định của `FloatSampler`) — bucket là quintile của range nên 4/5 bucket rơi vào [0, 0.5) → lệch 80/20 về MATRIX (đo thực tế: MATRIX 1614 / VECTOR 386 trong 2000 draw với seed 12345).
+- `"uniform"` — 50/50 thực (đo: MATRIX 974 / VECTOR 1026 trong 2000 draw).
+
+**Rationale:** Bucket của `balanced` thiết kế cho *parameter* có phân phối lệch tự nhiên (window, lag), không phải cho *lựa chọn nhị phân*. Ở đây MATRIX vs VECTOR là hai nhánh ngang hàng, nên phải đều tỉ lệ.
+
+**Impact on reported results:** Quyết định này làm thay đổi tỉ lệ type trong mọi expression → thay đổi phân phối hành vi alpha được sample. Nếu để `balanced`, kết quả bị thiên 80% về MATRIX và reviewer sẽ hỏi tại sao VECTOR (pool chỉ 1794 field) xuất hiện hiếm.
+
+**Sentiment:** 8 — ảnh hưởng trực tiếp phân phối expression, reviewer chắc chắn hỏi.
+
+## 2026-10-26T17:39:16Z | methodology | score: 8
+
+**Decision:** Chưa đưa expression builder vào `main.py` cho tới khi 5 blocker dưới đây được chốt. Đo trước, sửa sau.
+
+**Alternatives considered:**
+- Viết builder thẳng vào `main.py` rồi test sau: nhanh hơn nhưng 5 lỗi trên đều là lỗi *âm thầm* (expression vẫn render ra, chỉ hỏng khi tái tạo hoặc khi submit) → phát hiện muộn, tốn slot.
+- Test bằng `try/except` bao quanh: che lỗi, không biết lỗi gì.
+
+**Rationale:** Đo được 5 blocker (tất cả trong `/tmp/proto/`, script có thể chạy lại):
+1. **Không tái lập được**: cùng seed → 5/5 expression khác nhau. Nguyên nhân: `MatrixUnary`/`Group` sample tham số với `seed=None` (`Functions/operators.py` dòng 743, 763, 789, 818, 846, 862, 881, 922–933, 958–964, 1032–1039, 1073–1080, 1268, 1335–1343, 1364–1372, 1409–1413, 1617–1619, 1632–1634, 1656–1662) và `MatrixBinary` chỉ có `ts_corr`/`ts_covariance`/`ts_regression` nhận `seed`.
+2. **`get()` không replay được**: 42/68 builder raise TypeError khi truyền `config`; 4 builder còn lại lệch tên key (`kth_element`, `normalize`, `scale`, `ts_backfill`) và `group_backfill` crash với `ValueError: Unknown format code 'f'` vì `config["std"]` đã bị format thành string.
+3. **`Group` bucket range không hợp lệ 9.06%**: `step >= (max - min)` ⇒ `range='a, b, s'` chỉ tạo 1 bucket. `min == max` không xảy ra (đã swap trước).
+4. **Field id lặp lại trong 70% expression**: draw field không chống trùng giữa các lá, nên `multiply(f, f)` (alpha hằng) xảy ra.
+5. **Slot đầu của platform**: đo lại, **KHÔNG có bug**. `MatrixBinary.get(name, x, y)` gọi builder *theo vị trí*, nên arg đầu của caller luôn vào slot đầu khi render: `get("ts_covariance", A, B)` → `ts_covariance(A, B)` → platform đọc `y=A, x=B`. Việc `ts_covariance` có signature `(y, x, d)` chỉ là quy ước *tên* của platform; builder đã map đúng. Hệ quả: **đảo operand là hợp lệ** cho mọi operator không giao hoán (`subtract`, `divide`, `power`, `signed_power`, `ts_corr`, `ts_covariance`, `ts_regression`, `vector_neut` — đo: cả 8 đều khác nhau khi đảo).
+
+**Impact on reported results:** Không có con số nào được report trước khi sửa 4 điểm blocker đầu. Nếu bỏ qua điểm 1 thì toàn bộ run không replay được ⇒ mọi "alpha tốt" tìm được là do may rủi, không tái tạo. Điểm 4 làm giảm hiệu quả tìm kiếm vì một phần ngân sách chạy rơi vào expression hằng. Điểm 3 làm hỏng 9% expression GROUP. Điểm 5 (sai slot) đã bị bác sau khi đo lại — xem "Tín hiệu sai" bên dưới.
+
+**Tín hiệu sai đã bác (sau khi đo lại):** test đầu tiên báo "`ts_covariance`/`ts_regression` render sai slot đầu platform". Sai. `get()` gọi builder theo vị trí nên arg đầu của caller luôn vào slot đầu khi render; `ts_covariance` có signature `(y, x, d)` chỉ là *tên* platform dùng, builder đã map đúng. Bài học: kiểm tra lại claim bằng một test độc lập trước khi ghi vào diary.
+
+**Sentiment:** 8 — ảnh hưởng trực tiếp mọi con số sẽ report; reviewer sẽ hỏi ở từng điểm.
+
+## 2026-10-26T17:50:41Z | methodology | score: 8
+
+**Decision:** Bộ build trong `main.py` dùng 4 pool operator cố định, `BINARY_POOL` **loại `divide` và `power`**.
+
+**Alternatives considered:**
+- Giữ `divide`: không có `filter=true` nên mẫu số 0 raise ngay trên platform ⇒ mất slot. Giữ `power`: base âm + số mũ phân số ⇒ NaN.
+- Dùng `multiply` thay cho `divide`: `multiply` có `filter=true` nên NaN thành 1, an toàn hơn, và đã có trong pool.
+
+**Rationale:** Cả hai operator lỗi **chỉ lộ ra lúc simulate**, tức là lúc đã tốn slot. Loại khỏi pool là cách rẻ nhất; nếu sau này muốn giữ chúng thì phải bọc epsilon cho `divide` và ép exponent nguyên cho `power`.
+
+**Số layer thật (đo, không phải suy ra):** tổng layer = 1 + số vòng ghép cặp, số vòng = số lần lặp `m → ceil(m/2)`.
+
+| N | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 12 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| layer | 1 | 2 | 3 | 3 | 4 | 4 | 4 | 4 | 5 | 5 |
+| binary op | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 11 |
+
+Công thức `ceil(n/2)+1` mà user đưa ra **đúng tới N=6 và sai từ N=7 trở đi** (N=8: công thức cho 5, thật là 4; N=12: cho 7, thật là 5).
+
+**Impact on reported results:** Độ dài expression tăng nhanh theo N: N=1 → 60–70 ký tự, N=3 → 160–650, N=6 → tới 2603 trong một draw. Không có giới hạn độ dài nào của platform được xác nhận, nên chưa đặt trần; nếu N lớn hơn thì phải đặt.
+
+**Sentiment:** 8 — quyết định loại operator ảnh hưởng không gian tìm kiếm; số layer là thứ user sẽ hỏi lại.
+
+## 2026-10-26T18:05:00Z | methodology | score: 9
+
+**Decision:** Số layer của expression là `1 + ceil(log2 N)`, và bộ build được chứng minh đúng cho **mọi N từ 1 đến 64**.
+
+**Alternatives considered:**
+- Dùng công thức `ceil(N/2)+1` của user: sai, vì nó đếm **số expression còn lại sau vòng ghép cặp đầu tiên**, không phải số vòng. Trùng khớp một cách tình cờ khi N ∈ [2,6].
+- Dùng `1 + ceil(log2 N)`: đúng với mọi N, đo khớp tuyệt đối trên N=1..1000.
+
+**Rationale:** Mỗi vòng ghép cặp giảm số lá từ `m` xuống `ceil(m/2)`, nên số vòng để còn 1 lá là số lần lặp `m → ceil(m/2)`, tức `ceil(log2 N)`. Ngoài layer lá, còn `ceil(log2 N)` layer ghép cặp ⇒ tổng `1 + ceil(log2 N)`.
+
+| N | 1 | 2 | 3 | 4 | 5 | 6 | **7** | 8 | 9 | 16 | 32 | 64 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ceil(N/2)+1` (sai) | 2 | 2 | 3 | 3 | 4 | 4 | **5** | 5 | 6 | 9 | 17 | 33 |
+| `1+ceil(log2 N)` (đúng) | **1** | 2 | 3 | 3 | 4 | 4 | **4** | 4 | 5 | 5 | 6 | 7 |
+
+**Impact on reported results:** Không con số nào đổi, nhưng công thức layer là thứ dùng để giải thích độ phức tạp của expression trong bài báo. Dùng công thức sai sẽ khiến reviewer đặt nghi vấn về toàn bộ mô tả cây. Độ dài expression đo được: n=1 → 67–343 ký tự, n=6 → 479–1418, n=16 → 2101–4433, n=64 → 16024–18457. Biên độ rất rộng ở n nhỏ vì số wrapper ngẫu nhiên (0..2) nhân với hệ số phình của operator (`if_else` 10.9×, `group_zscore` 12.0×).
+
+**Sentiment:** 9 — sửa được một công thức sai đã đi vào lời giải thích, và chứng minh bằng sweep chứ không bằng suy luận.
+
+## 2026-10-26T18:18:52Z | methodology | score: 8
+
+**Decision:** Một field type chỉ được coi là dùng được khi pool của nó có **≥ 3 field** (VECTOR, GROUP); MATRIX giữ ngưỡng 1. Pool dưới ngưỡng bị coi là rỗng: nhánh operator của type đó **tắt hoàn toàn** trong expression.
+
+**Alternatives considered:**
+- Ngưỡng 3 cho cả 3 type: loại bỏ scope có MATRIX < 3 (không có scope nào như vậy trong cache hiện tại, nhưng `DEU_0_TOP500` với `THEME=['pv']` có MATRIX = 0).
+- Ngưỡng 1 cho tất cả: `USA_1_*` với `THEME=['model']` có đúng 1 GROUP field (`model10`) ⇒ mọi expression trong scope dùng chung một group id, không có biến thiên ⇒ vô nghĩa về mặt thống kê.
+
+**Rationale:** Ngưỡng 3 là quyết định của user. Một pool 1–2 field không tạo ra biến thiên giữa các expression, nên nhánh đó bị tắt thay vì dùng.
+
+**Impact on reported results:** Với `THEME=['model']`, nhánh group tắt ở **41/41 scope** (GROUP pool = 1 ở `USA_1_*`, = 0 ở phần còn lại) ⇒ không expression nào chứa `group_*`. Với `THEME=[]`, nhánh group chỉ tắt ở `DEU_0_TOP500` và `GBR_0_TOP700` (GROUP pool = 0).
+
+**Quy tắc phân bổ field (đã sửa):** MATRIX và VECTOR là **một pool**, không phải hai pool độc lập. Mỗi type nhận đúng phần draw yêu cầu, bị chặn bởi kích thước pool; phần thiếu chuyển cho type còn dư field. Bản cũ lấy `min(n, pool)` từ *mỗi* type nên tổng bị chặn ở `min(n,M) + min(n,V)` — ở `DEU_0_TOP500` (M=10, V=10) với n=24 chỉ ra 20 field.
+
+**Sentiment:** 8 — ngưỡng ảnh hưởng trực tiếp expression nào được sinh ra, reviewer sẽ hỏi vì sao một số scope không có `group_*`.
+
+## 2026-10-26T19:21:07Z | methodology | score: 9
+
+**Decision:** Giới hạn của platform là **số operator call trong FASTEXPR** (`PLATFORM_OPERATOR_LIMIT = 64`), đếm trên text đã render, kể cả operator lồng bên trong argument của operator khác. Số field `n` bị giới hạn theo hệ quả: một cây n lá cần ≥ n-1 operator cho các join, nên **n ≤ 65**, và để expression còn "thú vị" thì `n ≤ 24` (còn 40 operator cho wrapper).
+
+**Alternatives considered:**
+- Chỉ giới hạn `n` bằng hằng số: không đủ, vì cost phụ thuộc operator được bốc, không chỉ số lá. Cùng n=6 đã cho 10..57 operator.
+- Bỏ `sqrt`/`trade_when`/`if_else` khỏi pool: mất 4 operator có giá trị (sqrt xử lý âm, trade_when là điều kiện thời gian) để trán một rủi ro hiếm. Giữ pool, chỉ loại khi thật sự cần.
+
+**Rationale:** Mô hình đếm được **xác thực bằng chính lỗi platform**: `sqrt(f)` = 5 operator, `sqrt(sqrt(f))` = 25, `sqrt^3(f)` = 105 — khớp đúng con số "105 found" trong lỗi. Cơ chế nhân: một operator render argument nhiều lần (`sqrt` ×4, `trade_when` ×3, `if_else` ×2, group ×2 qua `bucket(rank(x))`), nên cost của một subtree bị toán tử cha nhân lên, và cost của cây **không phải tổng các phần**.
+
+**Impact on reported results:** `FIELD_COUNTS` đổi từ `(1,2,3,60)` → `(1,2,3,6,12,24)`. Trước đó mọi expression ở n=60 đều vượt 64 và bị platform từ chối, nên **không có con số nào báo cáo được** ở n=60. Các n ≤ 24 giữ nguyên hành vi trước đây.
+
+**Quy tắc cấp ngân sách operator:** mỗi lá được cấp một allowance = (64 - (n-1)) / n operator. Wrapper vượt allowance thì bỏ. Nếu tổng vẫn vượt 64, allowance bị halve và cây dựng lại; các tầng pool sau lần lượt bỏ operator lặp argument, rồi tới fallback `add` thuần.
+
+## 2026-10-27T16:59:10Z | methodology | score: 8 | tag: scale-fix
+
+**Tags:** scale-fix
+
+**Decision:** Before add/subtract/multiply/signed_power, each operand is wrapped in cross-sectional rank(), mapping it to [0, 1].
+
+**Alternatives considered:**
+ts_rank(x, 252): per-stock time-series rank, loses cross-sectional level information, 252-day NaN warm-up, hard-coded window.
+zscore(x): keeps distribution shape, sensitive to outliers.
+No normalization: the larger-scale operand dominates (e.g. ts_arg_max(cap,15) in 0..14 vs ts_delta(returns,4) near 0.0x).
+
+**Rationale:** rank is scale-free, needs no window, costs 1 operator per operand. ts_corr is scale-free and if_else already rank-wraps (Docs/all-operators.md line 491), so both are excluded.
+
+**Impact on reported results:** every add/subtract/multiply/signed_power join changes meaning and the operator budget shrinks by 2 per join; flipping this restores raw-scale joins. ts_covariance and ts_regression remain unnormalized.
+
+**Sentiment:** 8 — reviewer would ask about scale comparability of joined signals.
+
+## 2026-10-27T18:53:25Z | methodology | score: 8 | tag: composition-layer
+
+**Tags:** composition-layer
+
+**Decision:** Đo độ bão hòa của generator bằng 4 metric riêng biệt thay vì một metric "độ đa dạng" duy nhất, rồi chỉ mở lever ở composition-layer — không thay đổi quy tắc của primitive operator nào.
+
+**Alternatives considered:**
+Metric shape duy nhất (đếm skeleton khác nhau): bỏ vì tham số ngẫu nhiên (window, float) tạo ra entropy vô hạn, nên 8000/8000 skeleton khác nhau là hệ quả combinatorics chứ không phải diversity có ý nghĩa.
+Thêm operator mới vào `Functions/operators.py` (bucket BOOLEAN): bỏ vì phần lớn trong số đó là so sánh infix (`input1 > input2`), không phải function call — `OPERATOR_CALL` không match nên ngân sách operator sẽ đếm thiếu; cần sửa bộ đếm trước khi dùng.
+Dùng lại field (một field xuất hiện ở nhiều slot): bỏ vì đo cho thấy gain cấu trúc ~0 và sinh nhiều case tự triệt tiêu (`rank(f) - rank(f)` = 0).
+
+**Rationale:** bốn metric tách ra bốn câu hỏi khác nhau. Structure (bỏ mọi số) cho câu hỏi "bao nhiêu hình dạng". Topology cho "cây có đủ kiểu không". Binding cho "field nào đi với field nào". Commutativity-normalization cho "có bao nhiêu chuỗi là bản sao giá trị của nhau". Kết quả: shape đã bão hòa (structure 7857/8000 ở N=3, tăng chậm; topology 2860/3000; collapse theo commutativity chỉ 0.1%), binding thấp (32 ở N=2, 180 ở N=4) — nghĩa là generator đã khám phá hết không gian mà kiến trúc cho phép, và nút thắt là **operator chưa dùng** chứ không phải hình dạng.
+
+**Impact on reported results:** mọi expression sinh ra đều khác kiến trúc cũ. Lever post-join wrapper làm mean operator count tăng từ 14.2 lên 20.5 ở N=3 (tỉ lệ expression có transform-above-join 56.3% → 85.7%); lever variadic làm mean operator count giảm từ 14.2 xuống 13.1 ở N=3 và từ 28.5 xuống 26.4 ở N=6, vì một lệnh `max(a,b,c)` tốn 1 operator thay vì 2 join nhị phân. Nếu reviewer hỏi tại sao ngân sách operator thay đổi, đây là con số.
+
+**Sentiment:** 8 — quyết định dựa trên phép đo, và cả hai lever đều mở vị trí biểu thức mà kiến trúc cũ không sinh ra được.

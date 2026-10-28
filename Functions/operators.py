@@ -574,6 +574,75 @@ class MatrixBinary:
         )
 
 
+class Variadic:
+    """The VARIADIC operators: any number of matrix fields in, one matrix out.
+
+    Only `max` and `min` live here. They take at least two inputs and are
+    commutative, so the order the operands are given in does not change the
+    result.
+    """
+
+    @staticmethod
+    def get(
+        name: str,
+        operands: list[str],
+    ) -> tuple[str, OperatorProfile]:
+        """Build the named VARIADIC operator over a list of matrix expressions.
+
+        `name` is the operator name as the platform spells it, `operands` are
+        two or more matrix field ids or expressions.
+
+        Returns a tuple of (expression, profile) where expression is the
+        FASTEXPR string and profile contains category, name, and config.
+        """
+        builders={
+            "max": Variadic.max_,
+            "min": Variadic.min_,
+        }
+        if name not in builders:
+            raise ValueError(f"Unknown VARIADIC operator: {name}")
+        if len(operands) < 2:
+            raise ValueError(
+                f"{name} needs at least 2 operands, got {len(operands)}."
+            )
+        return builders[name](operands)
+
+    @staticmethod
+    def _profile(
+        name: str,
+        config: dict[str, int | bool | float | str],
+        expression: str,
+    ) -> tuple[str, OperatorProfile]:
+        """Assemble the expression and profile of one built operator call.
+
+        `config` holds the arguments that are not matrix fields and that the
+        draw produced. For VARIADIC, config is always empty since no parameters
+        are sampled.
+
+        Returns a tuple of (expression, profile).
+        """
+        profile: OperatorProfile={
+            "category": "VARIADIC",
+            "name": name,
+            "config": config,
+        }
+        return (expression, profile)
+
+    @staticmethod
+    def max_(operands: list[str]) -> tuple[str, OperatorProfile]:
+        """Build the `max` FASTEXPR over two or more matrix fields."""
+        return Variadic._profile(
+            "max", {}, f"max({', '.join(operands)})"
+        )
+
+    @staticmethod
+    def min_(operands: list[str]) -> tuple[str, OperatorProfile]:
+        """Build the `min` FASTEXPR over two or more matrix fields."""
+        return Variadic._profile(
+            "min", {}, f"min({', '.join(operands)})"
+        )
+
+
 class MatrixUnary:
     """The MATRIX_UNARY operators: one matrix field in, one matrix out.
 

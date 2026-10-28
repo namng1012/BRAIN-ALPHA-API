@@ -592,7 +592,7 @@ Signature: `trade_when(x, t1=None, t2=None, d1=None, d2=None, *, distribution="b
 | Definition của operator so sánh (`equal`, `less`, …) là **không có ngoặc** | `OperatorTable.arg_names()` trả về rỗng → chúng không thể là SELECT. Đúng như mong muốn (chúng là BOOLEAN), nhưng là hệ quả chứ không phải thiết kế. |
 | Bảng không còn hiệu lực khi platform đổi operator | Không có timestamp. Xoá `cache/operators.csv` để fetch lại. |
 | `COMBO` và `SELECTION` scope chưa được phân loại | Tài liệu này chỉ phủ `REGULAR`. |
-| 4 bucket chưa có builder (16 operator) | `MATRIX_GENERATED` (1), `VARIADIC` (2), `BOOLEAN` (10), `GROUPING` (3) — xem §10.2. |
+| 3 bucket chưa có builder (14 operator) | `MATRIX_GENERATED` (1), `BOOLEAN` (10), `GROUPING` (3) — xem §10.2. |
 | `Group` mode 4 và mode 5 sinh **cùng một chuỗi** | Chưa sửa, xem §10.3. |
 
 ---
@@ -601,7 +601,7 @@ Signature: `trade_when(x, t1=None, t2=None, d1=None, d2=None, *, distribution="b
 
 Giai đoạn 1 là dựng **expression cơ bản**: mỗi operator có builder trả `(expression, profile)`, tham số rút ngẫu nhiên khi để `None` và replay được từ `config`. Trạng thái chốt ngày **2026-10-26**.
 
-### 10.1 Đã có builder: 68 / 84 operator
+### 10.1 Đã có builder: 70 / 84 operator
 
 | Class | Bucket | Số operator |
 | --- | --- | --- |
@@ -609,18 +609,20 @@ Giai đoạn 1 là dựng **expression cơ bản**: mỗi operator có builder t
 | `MatrixUnary` | `MATRIX_UNARY` 40 + `SELECT` 1 (`trade_when`) | 41 |
 | `Vector` | `VECTOR` | 7 |
 | `Group` | `GROUP` | 9 |
-| | **Tổng** | **68** |
+| `Variadic` | `VARIADIC` | 2 |
+| | **Tổng** | **70** |
 
 Cách kiểm: chạy từng tên operator của CSV qua `get()` của class tương ứng; tên nào `get()` từ chối (`KeyError`/`ValueError`) thì tính là chưa có builder. `main.py` in một ví dụ cho mỗi builder (`if_else` trong vòng binary, `trade_when` trong vòng unary).
 
-### 10.2 Chưa có builder: 16 operator
+### 10.2 Chưa có builder: 14 operator
 
 | Bucket | Số | Operator |
 | --- | --- | --- |
 | `MATRIX_GENERATED` | 1 | `ts_step` |
-| `VARIADIC` | 2 | `max`, `min` |
 | `BOOLEAN` | 10 | `and`, `equal`, `greater`, `greater_equal`, `is_nan`, `less`, `less_equal`, `not`, `not_equal`, `or` |
 | `GROUPING` | 3 | `bucket`, `densify`, `group_cartesian_product` |
+
+Bucket `BOOLEAN` không có builder vì phần lớn operator trong đó là **so sánh infix** (`input1 > input2`), không phải function call: `OPERATOR_CALL` trong `main.py` chỉ match `name(`, nên một expression có điều kiện boolean sẽ bị đếm thiếu trong ngân sách operator. Cần sửa bộ đếm trước khi viết builder cho nhóm này.
 
 `bucket`, `densify`, `group_cartesian_product` đã xuất hiện **bên trong** expression do `Group` dựng (mode 2 đến 5), nhưng chưa có builder độc lập.
 

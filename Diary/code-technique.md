@@ -625,3 +625,141 @@ Giờ caller có thể:
 **Reusable in:** mọi bộ lọc theo cột khác (datasetid, subcategoryid) trước khi rút mẫu.
 
 **Sentiment:** 6 — không phá tái lập khi thêm bộ lọc.
+
+## 2026-10-26T15:50:38Z | code-technique | score: 6
+
+**Where:** `main.py` — block "Pool in {scope} (theme=...)"
+
+**Pattern:** đo pool size trước khi random bằng `np.isin(snapshot.column("categoryid"), THEME).sum()`, mở/đóng `ScopeCache` theo từng type.
+
+**Why:** `sample_field_ids` trả về list rỗng khi pool của type đó không có field nào khớp theme → `[0]` ném `IndexError` ở chỗ không liên quan. Đếm pool trước biết ngay type nào không dùng được, và in ra pool size để đánh giá tính đại diện của draw.
+
+**Reusable in:** mọi lần bổ sung bộ lọc trước khi rút mẫu (datasetid, subcategoryid) — cùng cách đếm trên cột rồi mới draw.
+
+**Sentiment:** 6 — chặn lỗi im lặng, pattern tái dùng được.
+
+## 2026-10-26T15:53:29Z | code-technique | score: 6
+
+**Where:** `main.py` — vòng for bốc N field type
+
+**Pattern:** dùng bảng `pools` đo trước số field theo type để làm guard cho mọi lần pick: type rỗng thì fallback sang type còn lại, cả hai rỗng thì print + break.
+
+**Why:** `sample_field_ids` trả về list rỗng khi pool rỗng → `[0]` ném IndexError ở ngữ cảnh không liên quan (không biết vì sao field không tồn tại). Guard bằng pool size biến lỗi thành thông báo có kiến thức.
+
+**Reusable in:** mọi bước rút mẫu từ pool hữu hạn (field, operator, dataset) — đo pool trước, pick sau.
+
+**Sentiment:** 6 — chặn IndexError im lặng, tái dùng được.
+
+## 2026-10-26T17:39:16Z | code-technique | score: 8
+
+**Where:** `/tmp/proto/test_builder.py` — probe `get()` vs builder trực tiếp của cả 4 class trong `Functions/operators.py`.
+
+**Pattern:** để replay được `profile["config"]`, phải gọi **builder trực tiếp** (`MatrixUnary.ts_mean(x, d=...)`), không phải `get()`. `get()` có signature cứng `(name, x, y, *, distribution)` nên không forward `**kwargs` ⇒ `get(name, *args, **config)` raise TypeError. Ngược lại builder trực tiếp vẫn hỏng ở 5 chỗ vì tên key trong `config` không khớp tên tham số: `kth_element` (`ignore` không có tham số), `normalize` (`useStd` vs `use_std`), `scale` (`scale` vs `book_size`), `ts_backfill` (`lookback` vs `d`), `group_backfill` (`std` bị format thành string `"{std:.2f}"` nên replay crash với `ValueError: Unknown format code 'f'`). Ngoài ra 5 operator `group_*` có **MISMATCH** (không raise, nhưng ra expression khác): `config` không lưu 3 tham số `bucket_range` nên `min`/`max`/`step` của `bucket` được bốc lại.
+
+**Why:** `Docs/all-operators.md` §8.2 nói "bit-exact replay từ config (recommended)" — đo thực tế thì đường đó hỏng cho 41/68 builder. Đây là loại bug im lặng: expression vẫn chạy, chỉ hỏng lúc cần tái tạo.
+
+**Reusable in:** bất kỳ chỗ nào `config` được dùng làm "replay key" — phải kiểm tra `inspect.signature(builder)` khớp key của `config` trước, hoặc lưu `config` theo đúng tên tham số của builder.
+
+**Sentiment:** 8 — tài liệu hứa một khả năng mà code không có; reviewer sẽ yêu cầu chứng minh reproducibility.
+
+## 2026-10-26T17:50:41Z | code-technique | score: 8
+
+**Where:** `main.py` — `build_expression()` và các pool `BINARY_POOL` / `UNARY_POOL` / `VECTOR_POOL` / `GROUP_POOL`.
+
+**Pattern:** đếm lời gọi builder để kiểm tra cấu trúc cây, thay vì đếm bằng regex trên chuỗi expression. Regex không phân biệt được "node của cây" với "operator mà operator tự nhúng" (`MatrixUnary.sqrt` render ra `if_else`, `Group` mode 3–5 render ra `bucket(rank(x))`), nên đếm sai tới 25/480 cây. Monkey-patch `MatrixBinary.get` / `MatrixUnary.get` / `Group.get` / `Vector.get` bằng hàm đếm, rồi assert count ⇒ kết quả 0 vi phạm trên 480 cây.
+
+**Why:** Cấu trúc cây là thứ quyết định "layer" mà user hỏi, và nó phải đúng thì mọi đo đạc phía sau mới có nghĩa. Đếm bằng chuỗi là loại kiểmm tra cho kết quả sai.
+
+**Reusable in:** bất kỳ cây biểu thức nào dựng bằng cách ghép chuỗi — kiểm tra số node bằng cách đếm lời gọi hàm dựng, không bằng cách đếm ký tự.
+
+**Sentiment:** 8 — phát hiện ra lỗi trong chính cách kiểmm tra; reviewer sẽ hỏi "làm sao biết cây đúng?".
+
+## 2026-10-26T18:05:00Z | code-technique | score: 8
+
+**Where:** `main.py` — `draw_fields()`.
+
+**Pattern:** khi một pool rỗng và phải fallback sang pool khác, **phải ghi lại type theo nguồn id thực sự**, không phải theo type đã định bốc. Ở đây type quyết định lá có cần bọc `vec_*` hay không; ghi sai type ⇒ `vec_*` bọc một matrix field ⇒ expression sai chỉ lộ ra lúc simulate.
+
+**Why:** Bản đầu đổi `drawn_ids["VECTOR"] = drawn_ids["MATRIX"]` mà vẫn ghi `field_types.append("VECTOR")` ⇒ một field matrix bị bọc `vec_avg(...)`, tức là toán học sai (vec trên field scalar) chứ không chỉ là lỗi cú pháp.
+
+**Reusable in:** mọi fallback pool-đến-pool: gắn nhãn theo nguồn, không theo ý định.
+
+**Sentiment:** 8 — loại bug âm thầm chỉ lộ ra ở bước simulate, tốn slot; reviewer sẽ hỏi về type correctness.
+
+## 2026-10-26T18:18:52Z | code-technique | score: 7
+
+**Where:** `main.py` — `draw_fields()`, phân bổ field giữa MATRIX và VECTOR.
+
+**Pattern:** khi hai pool field phải cùng thoả một yêu cầu số lượng, **coi chúng là một pool duy nhất**, không phải hai lần `min(n, pool)` độc lập. Cấp phần theo draw trước, chặn bởi kích thước pool, rồi chuyển phần thiếu sang pool còn dư.
+
+**Why:** `min(n, M) + min(n, V)` nhỏ hơn `n` khi cả hai pool cùng nhỏ hơn n. Ở `DEU_0_TOP500` (M=10, V=10) với n=24 chỉ ra 20 field ⇒ expression có 20 lá thay vì 24 ⇒ số binary op là 19 thay vì 23 ⇒ cây lệch khỏi thiết kế.
+
+**Reusable in:** mọi bài toán chia ngân sách lấy mẫu từ nhiều pool với tổng cố định.
+
+**Sentiment:** 7 — lỗi im lặng, chỉ lộ ra khi sweep nhiều scope với theme hẹp.
+
+## 2026-10-26T18:33:18Z | code-technique | score: 7
+
+**Where:** `main.py` — `build_expression()` và `draw_fields()`.
+
+**Pattern:** dùng `IntegerSampler.sample(value_range)` (seed mặc định `None`) cho **mọi** quyết định ngẫu nhiên: chọn operator, chọn số wrapper, coin-flip group/unary, thứ tự ghép cặp, loại field. Không giữ `np.random.Generator` song song.
+
+**Why:** dự án đã có sẵn `Functions/random.py` với `IntegerSampler` / `FloatSampler`; giữ `np.random` ở `main.py` tạo ra hai hệ thống entropy cùng tồn tại, khó kiểm soát khi tái lập. Với `seed=None` mỗi draw lấy fresh entropy từ OS CSPRNG ⇒ mỗi alpha độc lập, không cần stream/scheme nào.
+
+**Reusable in:** mọi entry point sinh alpha. Lưu ý: `FloatSampler.sample` mặc định `distribution="balanced"` (chia 5 bucket) nên **không** dùng nó cho coin-flip 50/50 — dùng `IntegerSampler.sample((0, 1))`.
+
+**Bẫy khi verify:** không thể đếm cây bằng substring trên text FASTEXPR — `if_else` render thêm `multiply`/`ts_rank` bên trong, `tail` lặp lại field id. Phải instrument ở mức lời gọi builder (`MatrixBinary.get` v.v.) thì mới đếm đúng n-1 binary op và n field id lá.
+
+**Sentiment:** 7 — reviewer sẽ hỏi vì sao có hai hệ thống random trong cùng một dự án.
+
+## 2026-10-26T19:21:07Z | code-technique | score: 8
+
+**Where:** `main.py` — `operator_count()`, `PLATFORM_OPERATOR_LIMIT`, `build_expression()`.
+
+**Pattern:** đếm operator của một FASTEXPR bằng **regex trên text đã render** (`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`), không phải bằng cách đếm lời gọi builder.
+
+**Why:** một số operator **render argument nhiều lần** — `sqrt` 4 lần, `trade_when` 3 lần, `if_else` 2 lần (mỗi argument), group 2 lần (qua `bucket(rank(x))`). Nên cost của subtree bị toán tử cha **nhân**, không cộng: `sqrt^3(f)` = 5 + 4·25 = 105, đúng bằng con số platform báo lỗi. Đếm bằng lời gọi builder sẽ **undercount** và bỏ sót lỗi.
+
+**Reusable in:** mọi bước validate expression trước khi gửi platform. Cùng bài học: khi một builder sinh template có lặp, phải kiểm budget trên **text render**, không trên số lời gọi.
+
+**Bẫy khi verify:** substring count trên text FASTEXPR không đáng tin cho *cấu trúc* (`if_else` render thêm `multiply`/`ts_rank` bên trong, `tail` lặp lại field id) — nhưng nó **đúng** cho *số operator*, vì mỗi operator đều là một lời gọi có ngoặc mở.
+
+## 2026-10-27T15:23:08Z | code-technique | score: 4
+
+**Where:** main.py ExpressionBuilder (draw_fields, build, _tree, _leaf, _join_round)
+
+**Pattern:** Class holds scope-derived state (pools, group_id, fallback levels) once; per-N methods stay stateless.
+
+**Why:** The old code recomputed pool sizes in main() and passed group_id and 6 pool arguments through build_expression/_build_tree. Verified with 30 draws x 6 scopes x N in (1,2,3,6,12,24): operator count never exceeds 64.
+
+**Reusable in:** any later stage that needs the same scope/theme pools.
+
+**Sentiment:** 4 — obvious in hindsight.
+
+## 2026-10-27T16:59:10Z | code-technique | score: 6 | tag: scale-fix
+
+**Tags:** scale-fix
+
+**Where:** main.py ExpressionBuilder._join_round, SCALE_SENSITIVE, JOIN_COST
+
+**Pattern:** rank-wrap operands at join time, charge the wrapper cost to the operator budget
+
+**Why:** The operator budget (64) is checked on rendered text, so extra rank() calls must be counted up front (JOIN_COST=3 per join: 1 binary + 2 rank) or build() would only discover overflow after rendering.
+
+**Reusable in:** any builder step that inserts fixed operators around operands.
+
+**Sentiment:** 6 — small, but the budget accounting is easy to forget.
+
+## 2026-10-27T18:53:25Z | code-technique | score: 7 | tag: composition-layer
+
+**Tags:** composition-layer
+
+**Where:** `main.py` `ExpressionBuilder._post_wrap`, `_variadic_join`, `_join_round`
+
+**Pattern:** hai lever composition-layer nằm ngoài tầng lá — wrapper phủ lên cây đã join, và join nhiều operand trong một lệnh gọi
+
+**Why:** tầng lá chỉ bọc từng field riêng lẻ, nên giá trị đã kết hợp của hai field trở lên không bao giờ tới được một phép biến đổi. Đo trên 4000 mẫu N=3: 21/50 operator unary+group không bao giờ xuất hiện ở vị trí trên join; `rank` chiếm 1370 lần vì scale-fix bọc rank mọi operand của join. Lever `_post_wrap` nâng tỉ lệ expression có transform-above-join từ 56.3% lên 85.7%.
+
+**Reusable in:** bất kỳ builder nào ghép cây từ nhiều field — ngân sách operator tính trên text render, nên phải charge wrapper sau khi biết cây còn dư bao nhiêu chỗ.
+
+**Sentiment:** 7 — reviewer sẽ hỏi vì sao `ts_zscore(add(a, b))` không bao giờ xuất hiện; câu trả lời nằm trong kiến trúc tầng.
