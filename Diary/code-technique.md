@@ -763,3 +763,31 @@ Giờ caller có thể:
 **Reusable in:** bất kỳ builder nào ghép cây từ nhiều field — ngân sách operator tính trên text render, nên phải charge wrapper sau khi biết cây còn dư bao nhiêu chỗ.
 
 **Sentiment:** 7 — reviewer sẽ hỏi vì sao `ts_zscore(add(a, b))` không bao giờ xuất hiện; câu trả lời nằm trong kiến trúc tầng.
+
+## 2026-10-28T16:12:17Z | code-technique | score: 7 | tag: field-metadata
+
+**Tags:** field-metadata
+
+**Where:** `Functions/data.py` `CatalogBuilder.sample_field_ids`, `main.py` `ExpressionBuilder.draw_fields` / `_sample` / `__init__`
+
+**Pattern:** trả DataFrame đầy đủ cột thay vì list id, và giữ frame theo đúng thứ tự draw
+
+**Why:** archive đã lưu 19 cột metadata nhưng `take(picked, columns=["fieldid"])` chỉ lấy 1 cột rồi `.tolist()` — phần metadata bị bỏ dù đã nằm trên đĩa. `draw_fields` phải pop từ `queues[source]` theo thứ tự draw, nên frame phải được slice theo vị trí (`iloc[0]`, `iloc[1:]`), không phải `pd.concat` (concat gom theo type, sai thứ tự). Với DataFrame, `self._sample("GROUP", 1)[0]` không còn là id mà là Series theo cột → phải đổi thành `["fieldid"].iloc[0]`.
+
+**Reusable in:** bất kỳ hàm nào sample từ cache theo vị trí rồi trả về cho call site — giữ quan hệ thứ tự giữa giá trị và metadata là điều kiện tiên quyết.
+
+**Sentiment:** 7 — ba chỗ `[0]` trở thành Series/Series-of-Series là bug im lặng, reviewer sẽ hỏi tại sao đổi kiểu trả về mà không sửa hết call site.
+
+## 2026-10-28T17:05:57Z | code-technique | score: 8 | tag: expression-profile
+
+**Tags:** expression-profile
+
+**Where:** `main.py` `ExpressionBuilder.build` / `_profile` / `_walk` / `_rank_wrap`, `Functions/operators.py` `OperatorProfile` + `implicit_profile`
+
+**Pattern:** profile ba tầng — `data` (field + metadata), `levels` (operator name → list of calls), `counts` — dựng bằng cách đi trên cây đã build, không parse text render
+
+**Why:** profile phải mô tả đúng cái đã dựng thì mới phân tích được. Ba điểm dễ sai: (1) operator nội bộ — `group_*` mode 3/4/5 kéo theo `densify`/`bucket`/`group_cartesian_product`, `sqrt` kéo theo `if_else`/`sign`/`abs`, `trade_when` kéo theo `ts_rank`/`ts_zscore`/`abs`, `if_else` kéo theo `ts_rank` — không có trong `get()` nên phải khai báo tường minh qua `implicit`; (2) operator **lặp argument** (`group_*` mode 3+ nhúng lại `x` vào `bucket(rank(x))`, `trade_when` 3x) nên đếm *rendered occurrence* trong text ≠ đếm *logical call* trong profile — invariant đúng là coverage hai chiều theo **tên operator**, không phải theo số lần; (3) `rank` của scale-fix là scaffolding bắt buộc để join, không phải lựa chọn của generator ⇒ loại khỏi profile, nếu không nó chiếm ~40% số lượt operator và drown phần còn lại.
+
+**Reusable in:** bất kỳ hệ thống nào sinh rồi giải thích một biểu thức — nguyên tắc "profile đếm cái đã dựng, text đếm cái đã render, hai thứ khác nhau ở operator lặp argument" áp dụng cho mọi IR/query planner.
+
+**Sentiment:** 8 — invariant phải chọn đúng mới verify được; đếm số lần sẽ báo động giả âm và che mất lỗi thật.

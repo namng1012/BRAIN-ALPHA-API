@@ -1,6 +1,10 @@
 import re
 import sys
+import json
+from collections import Counter
+
 import numpy as np
+import pandas as pd
 from Functions.cache import CATALOG_MAX_AGE_SECONDS
 from Functions.data import BrainData, CatalogBuilder
 from Functions.login import RELOGIN_THRESHOLD_SECONDS, BrainLogin
@@ -99,7 +103,13 @@ class ExpressionBuilder:
             for field_type, size in self.pools.items()
             if size < self.MIN_POOL_SIZE[field_type]
         ]
-        self.group_id = None if "GROUP" in self.empty else self._sample("GROUP", 1)[0]
+        # The GROUP field is sampled on its own, because the group operators
+        # need it even when the expression itself uses no MATRIX or VECTOR
+        # field. The row is kept whole: its metadata belongs in the profile.
+        self.group_frame = None if "GROUP" in self.empty else self._sample("GROUP", 1)
+        self.group_id = (
+            None if self.group_frame is None else self.group_frame["fieldid"].iloc[0]
+        )
 
         # Operator pools per level, richest first. `build` falls to the next
         # level when no expression of the current one fits the operator limit.
@@ -141,12 +151,16 @@ class ExpressionBuilder:
         return size
 
     def draw_fields(self, n):
-        """Draw `n` distinct field ids and their types, MATRIX and VECTOR as one pool.
+        """Draw `n` distinct fields and their types, MATRIX and VECTOR as one pool.
 
         Each type is asked for a random share, capped by what its pool holds (a
         pool below its minimum gives nothing); the shortfall goes to whichever
         type still has fields. MATRIX, VECTOR and GROUP ids are pairwise
         disjoint (measured), so the ids of one expression are distinct.
+
+        Returns the list of drawn field types, the drawn field ids, and the
+        drawn rows as a frame carrying every column the archive holds, in draw
+        order.
         """
         types = ("MATRIX", "VECTOR")
         wanted = [types[IntegerSampler.sample((0, 1))] for _ in range(n)]
@@ -159,14 +173,14 @@ class ExpressionBuilder:
             shortfall -= extra
         queues = {t: self._sample(t, take[t]) for t in types}
 
-        field_types, field_ids = [], []
+        field_types, field_ids, rows = [], [], []
         for wanted_type in wanted:
             # The recorded type is where the id came from: it decides whether
             # the leaf needs a vec_* reduction.
-            source = wanted_type if queues[wanted_type] else next(
+            source = wanted_type if not queues[wanted_type].empty else next(
                 t for t in types if t != wanted_type
             )
-            if not queues[source]:
+            if queues[source].empty:
                 print(
                     f"No MATRIX and no VECTOR field available in "
                     f"{self.catalog.cache.key(self.scope)} (theme={self.theme}) "
@@ -174,10 +188,14 @@ class ExpressionBuilder:
                 )
                 break
             field_types.append(source)
-            field_ids.append(queues[source].pop(0))
-        return field_types, field_ids
+            row = queues[source].iloc[0]
+            field_ids.append(row["fieldid"])
+            rows.append(row)
+            queues[source] = queues[source].iloc[1:]
+        drawn = pd.DataFrame(rows)
+        return field_types, field_ids, drawn
 
-    def build(self, field_ids, field_types, max_wrappers=2):
+    def build(self, field_ids, field_types, max_wrappers=2, field_meta=None):
         """Build one FASTEXPR from `field_ids` that fits OPERATOR_LIMIT.
 
         Layers: a VECTOR field is reduced by one vec_* operator; each leaf gets
@@ -192,6 +210,12 @@ class ExpressionBuilder:
 
         The expression is rebuilt with a halving per-leaf wrapper allowance, then
         with poorer pools (see `levels`), until its rendered operator count fits.
+
+        Returns a tuple of (expression, profile). `profile` describes the whole
+        expression: the data fields it reads, the operators at each level, and
+        the counts that follow from them. `field_meta` is the metadata frame of
+        the drawn fields (see `draw_fields`); when it is None the profile lists
+        the field ids without their metadata.
         """
         n = len(field_ids)
         if n == 0:
@@ -212,19 +236,127 @@ class ExpressionBuilder:
         for pools in self.levels:
             allowance = max(1, (self.OPERATOR_LIMIT - self.JOIN_COST * (n - 1)) // n)
             while True:
-                expression = self._tree(field_ids, field_types, max_wrappers, allowance, pools)
+                tree = self._tree(field_ids, field_types, max_wrappers, allowance, pools)
+                expression = tree["expression"]
                 if self.operator_count(expression) <= self.OPERATOR_LIMIT:
                     # The post-join wrappers transform the combined signal, a
                     # position the leaf stage cannot reach. They are charged
                     # against whatever the tree left over, so they never push
                     # the expression past the limit.
-                    return self._post_wrap(expression, pools[1], pools[2])
+                    expression, post = self._post_wrap(tree, pools[1], pools[2])
+                    return expression, self._profile(
+                        expression, post, field_ids, field_types, field_meta
+                    )
                 if smallest is None or self.operator_count(expression) < self.operator_count(smallest):
                     smallest = expression
                 if allowance == 1:
                     break
                 allowance //= 2
-        return smallest
+        return smallest, self._profile(
+            smallest, None, field_ids, field_types, field_meta
+        )
+
+    def _profile(self, expression, tree, field_ids, field_types, field_meta):
+        """Assemble the profile of one built expression.
+
+        The profile has three parts:
+
+        - `data`: the fields the expression reads, each with its full metadata
+          from the catalog. A MATRIX or VECTOR field is a leaf of the
+          expression; the GROUP field is the one every group operator groups by.
+        - `levels`: the operators of each stage of the tree — the leaf stage,
+          the join stage and the stage on top of the joined tree. Each level
+          maps an operator name to the profiles of the calls that used it.
+        - `counts`: what follows from the two parts above.
+
+        The tree is walked rather than the rendered text parsed, so the profile
+        holds exactly the operators that were built, with the configuration
+        each call was drawn with.
+        """
+        operators_by_level = {"leaf": {}, "join": {}, "post": {}}
+        fields = []
+        if tree is not None:
+            self._walk(tree, operators_by_level, fields)
+
+        return {
+            "expression": expression,
+            "operator_count": self.operator_count(expression),
+            "data": {
+                "fields": self._field_metadata(fields, field_meta),
+                "group": self._group_metadata(),
+            },
+            "levels": {
+                level: {name: calls for name, calls in calls_by_name.items()}
+                for level, calls_by_name in operators_by_level.items()
+            },
+            "counts": self._counts(operators_by_level, fields),
+        }
+
+    def _walk(self, node, operators_by_level, fields):
+        """Collect the operators and the fields of one subtree into the profile.
+
+        An operator's own implicit calls — the `densify` and `bucket` the
+        platform's definition of a group operator brings along — are recorded
+        at the level of the operator that carries them, so a level's operators
+        sum to what that level actually put into the expression.
+        """
+        for operator in node["operators"]:
+            calls = operators_by_level[node["level"]].setdefault(operator["name"], [])
+            calls.append(dict(operator))
+            for implicit in operator.get("implicit", []):
+                implicit_calls = operators_by_level[node["level"]].setdefault(
+                    implicit["name"], []
+                )
+                implicit_calls.append(dict(implicit))
+        if node.get("field") is not None:
+            fields.append(dict(node["field"]))
+        for child in node["children"]:
+            self._walk(child, operators_by_level, fields)
+
+    def _counts(self, operators_by_level, fields):
+        """Summarize the profile: operators per level and per category."""
+        per_level = {
+            level: sum(len(calls) for calls in calls_by_name.values())
+            for level, calls_by_name in operators_by_level.items()
+        }
+        per_category = Counter()
+        for calls_by_name in operators_by_level.values():
+            for calls in calls_by_name.values():
+                for call in calls:
+                    per_category[call["category"]] += 1
+        return {
+            "operators_per_level": per_level,
+            "operators_per_category": dict(per_category),
+            "n_data_fields": len(fields),
+            "n_distinct_operators": sum(
+                len(calls_by_name) for calls_by_name in operators_by_level.values()
+            ),
+        }
+
+    def _group_metadata(self):
+        """The catalog metadata of the GROUP field, or None when there is none."""
+        if self.group_frame is None or len(self.group_frame) == 0:
+            return None
+        return self.group_frame.iloc[0].to_dict()
+
+    def _field_metadata(self, fields, frame):
+        """Attach the catalog metadata to each drawn field.
+
+        `fields` are the leaves of the expression, each a field id and its
+        type. `frame` is the catalog metadata of the drawn fields; a field
+        missing from it keeps only its id and type.
+        """
+        lookup = {}
+        if frame is not None and len(frame) > 0:
+            lookup = {
+                row["fieldid"]: row.to_dict()
+                for _, row in frame.iterrows()
+            }
+        out = []
+        for field in fields:
+            metadata = lookup.get(field["fieldid"], {})
+            out.append({**metadata, "type": field["type"]})
+        return out
 
     def _tree(self, field_ids, field_types, max_wrappers, allowance, pools):
         binary_pool, unary_pool, group_pool, variadic_pool = pools
@@ -236,18 +368,20 @@ class ExpressionBuilder:
             nodes = self._join_round(nodes, binary_pool, variadic_pool)
         return nodes[0]
 
-    def _post_wrap(self, expression, unary_pool, group_pool):
+    def _post_wrap(self, node, unary_pool, group_pool):
         """Apply 0..POST_WRAPPERS wrappers on top of the joined tree.
 
         A wrapper here transforms the combined signal. The leaf stage cannot
         produce that position: it only ever wraps a single field, so the
         combined value of two or more fields never reaches a transform.
         """
+        expression = node["expression"]
+        operators = []
         for _ in range(IntegerSampler.sample((0, self.POST_WRAPPERS))):
             if self.group_id is not None and group_pool and IntegerSampler.sample((0, 1)) == 0:
-                wrapped, _ = Group.get(self._pick(group_pool), expression, self.group_id)
+                wrapped, operator = Group.get(self._pick(group_pool), expression, self.group_id)
             elif unary_pool:
-                wrapped, _ = MatrixUnary.get(self._pick(unary_pool), expression)
+                wrapped, operator = MatrixUnary.get(self._pick(unary_pool), expression)
             else:
                 break
             # A repeating wrapper renders its argument several times, so it can
@@ -255,25 +389,40 @@ class ExpressionBuilder:
             if self.operator_count(wrapped) > self.OPERATOR_LIMIT:
                 break
             expression = wrapped
-        return expression
+            operators.append(operator)
+        return expression, {
+            "expression": expression,
+            "level": "post",
+            "operators": operators,
+            "children": [node],
+        }
 
     def _leaf(self, field_id, field_type, max_wrappers, allowance, unary_pool, group_pool):
         leaf = field_id
+        operators = []
         if field_type == "VECTOR":
-            leaf, _ = Vector.get(self._pick(self.VECTOR_POOL), field_id)
+            leaf, operator = Vector.get(self._pick(self.VECTOR_POOL), field_id)
+            operators.append(operator)
 
         for _ in range(IntegerSampler.sample((0, max_wrappers))):
             if self.group_id is not None and group_pool and IntegerSampler.sample((0, 1)) == 0:
-                wrapped, _ = Group.get(self._pick(group_pool), leaf, self.group_id)
+                wrapped, operator = Group.get(self._pick(group_pool), leaf, self.group_id)
             elif unary_pool:
-                wrapped, _ = MatrixUnary.get(self._pick(unary_pool), leaf)
+                wrapped, operator = MatrixUnary.get(self._pick(unary_pool), leaf)
             else:
                 break
             # A repeating wrapper can blow a tiny leaf past its allowance.
             if self.operator_count(wrapped) > allowance:
                 break
             leaf = wrapped
-        return leaf
+            operators.append(operator)
+        return {
+            "expression": leaf,
+            "level": "leaf",
+            "field": {"fieldid": field_id, "type": field_type},
+            "operators": operators,
+            "children": [],
+        }
 
     def _join_round(self, nodes, binary_pool, variadic_pool):
         # Fisher-Yates, so each round pairs the nodes in a different order.
@@ -314,12 +463,37 @@ class ExpressionBuilder:
             name = bag.pop(IntegerSampler.sample((0, len(bag) - 1)))
             if name in self.NON_COMMUTATIVE and IntegerSampler.sample((0, 1)) == 0:
                 left, right = right, left
+            operators = []
             if name in self.SCALE_SENSITIVE:
-                left, right = f"rank({left})", f"rank({right})"
-            expression, _ = MatrixBinary.get(name, left, right)
-            joined.append(expression)
+                # The scale fix is a plain `rank(x)` with no argument, so it
+                # carries no configuration of its own.
+                left, right = self._rank_wrap(left), self._rank_wrap(right)
+            expression, operator = MatrixBinary.get(name, left["expression"], right["expression"])
+            operators.append(operator)
+            joined.append({
+                "expression": expression,
+                "level": "join",
+                "operators": operators,
+                "children": [left, right],
+            })
             index += 2
         return joined
+
+    def _rank_wrap(self, node):
+        """Wrap one subtree in the plain `rank(x)` the scale fix needs.
+
+        The wrapper is a `rank` with no argument, so it carries no configuration
+        of its own. It is scaffolding the generator inserts to keep the operands
+        on one scale, not a choice the profile records: it is present in every
+        scale-sensitive join, so counting it would drown the operators the
+        profile is meant to describe.
+        """
+        return {
+            "expression": f"rank({node['expression']})",
+            "level": "join",
+            "operators": [],
+            "children": [node],
+        }
 
     def _variadic_join(self, name, operands):
         """Join `operands` with one VARIADIC call.
@@ -334,10 +508,17 @@ class ExpressionBuilder:
         cross-section while max(rank(a), rank(b)) takes the larger of two
         already-ranked values. They order the cross-section differently.
         """
+        operators = []
         if name in self.SCALE_SENSITIVE:
-            operands = [f"rank({operand})" for operand in operands]
-        expression, _ = Variadic.get(name, operands)
-        return expression
+            operands = [self._rank_wrap(operand) for operand in operands]
+        expression, operator = Variadic.get(name, [o["expression"] for o in operands])
+        operators.append(operator)
+        return {
+            "expression": expression,
+            "level": "join",
+            "operators": operators,
+            "children": operands,
+        }
 
 
 def main():
@@ -457,19 +638,22 @@ def main():
 
     # n leaves need n-1 joins, which eats the operator budget: at n=60 only
     # 5 operators remain and the expression degenerates into a bare `add` chain.
-    FIELD_COUNTS = (1, 2, 3, 6)
+    FIELD_COUNTS = (2,)
     for n in FIELD_COUNTS:
-        field_types, field_ids = expressions.draw_fields(n)
+        field_types, field_ids, drawn = expressions.draw_fields(n)
         if not field_ids:
             print(f"\nN={n}  skipped: no field available in this scope.")
             continue
-        expression = expressions.build(field_ids, field_types)
-        count = expressions.operator_count(expression)
+        expression, profile = expressions.build(field_ids, field_types, field_meta=drawn)
         print(f"\nN={n}  types={field_types}")
         for field_id in field_ids:
             print(f"  field: {field_id}")
-        print(f"  expression ({len(expression)} chars, {count} operators):")
+        print(f"  drawn fields ({len(drawn)} rows, {len(drawn.columns)} columns):")
+        print(drawn[["fieldid", "type", "categoryid", "coverage"]].to_string(index=False))
+        print(f"  expression ({len(expression)} chars, {profile['operator_count']} operators):")
         print(f"  {expression}")
+        print(" profile:")
+        print(json.dumps(profile, indent=2, default=str))
 
 
 if __name__ == "__main__":

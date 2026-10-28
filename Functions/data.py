@@ -346,8 +346,14 @@ class CatalogBuilder:
         n: int,
         seed: int | None = None,
         theme: tuple[str, ...] | list[str] = (),
-    ) -> list[str]:
-        """Draw `n` distinct field ids at random from one scope's stored catalog.
+    ) -> pd.DataFrame:
+        """Draw `n` distinct fields at random from one scope's stored catalog.
+
+        Returns one row per drawn field, carrying every column the archive
+        holds — the field id, its type, description, category, dataset and the
+        numeric coverage / value-score columns. The row order is the draw
+        order, so the caller can pop fields off the front and still know which
+        metadata belongs to which field.
 
         Every stored row is already eligible: `fetch_scope` applies the coverage
         filter before writing, so any position is a valid draw and no threshold
@@ -381,9 +387,9 @@ class CatalogBuilder:
                 positions.size, size=min(n, positions.size), replace=False
             )
         ]
-        field_ids = cache.take(picked, columns=["fieldid"])["fieldid"].tolist()
+        frame = cache.take(picked)
         cache.close()
-        return field_ids
+        return frame
 
     def run(self, data: BrainData | None) -> list[tuple[str, int, int]]:
         """Bring every scope onto disk, fetching the missing and the expired ones.

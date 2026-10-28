@@ -29,6 +29,7 @@ OperatorProfile=TypedDict(
         "category": str,
         "name": str,
         "config": dict[str, int | bool],
+        "implicit": list[dict[str, str]],
     },
 )
 OperatorProfile.__doc__="""One built operator call: what it is and how it is configured.
@@ -38,12 +39,44 @@ name, and `config` the arguments that are not matrix fields with the values
 the platform receives (the window `d`, the `lag`, the `rettype`). Arguments
 fixed by the operator itself are not listed: they do not change with the seed,
 so they are not needed to replay the call.
+
+`implicit` lists the operator calls this one brings along on its own — the
+`densify`, `bucket` and `ts_rank` that the platform's own definition of a
+group operator contains. They are part of the rendered expression but the
+caller did not choose them, so they carry no configuration.
 """
 
 # The data-field arguments of an operator call. The numeric and keyword
 # arguments (d, k, lag, rettype, filter, std) are not matrix fields, so
 # ts_corr(x, y, d) counts as two inputs and ts_mean(x, d) as one.
 DATA_ARGS={"x", "y", "z", "input", "input1", "input2", "input3"}
+
+# The operator calls a platform operator brings along on its own. They are
+# part of the rendered expression, but the caller never chose them and their
+# parameters are fixed by the operator's own definition, so they carry no
+# configuration. `bucket` is listed under the GROUPING bucket because that is
+# where the platform puts it; the rest are MATRIX_UNARY transforms.
+IMPLICIT_CATEGORY={
+    "densify": "GROUPING",
+    "bucket": "GROUPING",
+    "group_cartesian_product": "GROUPING",
+    "ts_rank": "MATRIX_UNARY",
+    "ts_zscore": "MATRIX_UNARY",
+    "abs": "MATRIX_UNARY",
+    "rank": "MATRIX_UNARY",
+    "sign": "MATRIX_UNARY",
+    "sqrt": "MATRIX_UNARY",
+    "if_else": "SELECT",
+    "ts_step": "MATRIX_GENERATED",
+}
+
+
+def implicit_profile(names) -> list[dict[str, str]]:
+    """Profile entries for the operator calls a platform operator brings along."""
+    return [
+        {"category": IMPLICIT_CATEGORY[name], "name": name, "config": {}}
+        for name in names
+    ]
 
 # The buckets, in the order a FASTEXPR walks through the data flow. The order
 # is the order the rows appear in the CSV.
@@ -297,6 +330,7 @@ class MatrixBinary:
         name: str,
         config: dict[str, int | bool],
         expression: str,
+        implicit: list[dict[str, str]] | None = None,
     ) -> tuple[str, OperatorProfile]:
         """Assemble the expression and profile of one built operator call.
 
@@ -305,12 +339,15 @@ class MatrixBinary:
         arguments fixed by the operator itself are not listed: they do not
         change with the seed, so they are not needed to replay the call.
 
+        `implicit` lists the operator calls this one brings along on its own.
+
         Returns a tuple of (expression, profile).
         """
         profile: OperatorProfile={
             "category": "MATRIX_BINARY",
             "name": name,
             "config": config,
+            "implicit": implicit or [],
         }
         return (expression, profile)
 
@@ -549,6 +586,7 @@ class MatrixBinary:
 
         rank_ops=("ts_rank(", "rank(", "scale(", "ts_scale(")
         config={"s1": s1, "s2": s2}
+        implicit=[]
         if x.startswith(rank_ops):
             _x=x
         else:
@@ -556,6 +594,7 @@ class MatrixBinary:
                 dx=IntegerSampler.sample((60, 252), None, 3, distribution=distribution)
             _x=f"ts_rank({x}, {dx})"
             config["dx"]=dx
+            implicit.append("ts_rank")
         if y.startswith(rank_ops):
             _y=y
         else:
@@ -563,6 +602,7 @@ class MatrixBinary:
                 dy=IntegerSampler.sample((60, 252), None, 4, distribution=distribution)
             _y=f"ts_rank({y}, {dy})"
             config["dy"]=dy
+            implicit.append("ts_rank")
 
         condition=f"{s1} * {_x} > {s2} * {_y}"
         expression=f"if_else({condition}, {_x}, {_y})"
@@ -571,6 +611,7 @@ class MatrixBinary:
             "if_else",
             config,
             expression,
+            implicit_profile(implicit),
         )
 
 
@@ -612,6 +653,7 @@ class Variadic:
         name: str,
         config: dict[str, int | bool | float | str],
         expression: str,
+        implicit: list[dict[str, str]] | None = None,
     ) -> tuple[str, OperatorProfile]:
         """Assemble the expression and profile of one built operator call.
 
@@ -619,12 +661,15 @@ class Variadic:
         draw produced. For VARIADIC, config is always empty since no parameters
         are sampled.
 
+        `implicit` lists the operator calls this one brings along on its own.
+
         Returns a tuple of (expression, profile).
         """
         profile: OperatorProfile={
             "category": "VARIADIC",
             "name": name,
             "config": config,
+            "implicit": implicit or [],
         }
         return (expression, profile)
 
@@ -771,6 +816,7 @@ class MatrixUnary:
         name: str,
         config: dict[str, int | bool | float | str],
         expression: str,
+        implicit: list[dict[str, str]] | None = None,
     ) -> tuple[str, OperatorProfile]:
         """Assemble the expression and profile of one built operator call.
 
@@ -779,12 +825,15 @@ class MatrixUnary:
         The arguments fixed by the operator itself are not listed: they do not
         change with the seed, so they are not needed to replay the call.
 
+        `implicit` lists the operator calls this one brings along on its own.
+
         Returns a tuple of (expression, profile).
         """
         profile: OperatorProfile={
             "category": "MATRIX_UNARY",
             "name": name,
             "config": config,
+            "implicit": implicit or [],
         }
         return (expression, profile)
 
@@ -971,9 +1020,17 @@ class MatrixUnary:
 
     @staticmethod
     def sqrt(x: str) -> tuple[str, OperatorProfile]:
-        """Build the `sqrt` FASTEXPR over one matrix field id."""
+        """Build the `sqrt` FASTEXPR over one matrix field id.
+
+        The platform's `sqrt` is undefined on a negative input, so the builder
+        returns the signed form: a positive input is square-rooted, and a
+        negative one keeps its sign.
+        """
         return MatrixUnary._profile(
-            "sqrt", {}, f"if_else({x} >= 0, sqrt({x}), sign({x})*sqrt(abs({x})))"
+            "sqrt",
+            {},
+            f"if_else({x} >= 0, sqrt({x}), sign({x})*sqrt(abs({x})))",
+            implicit_profile(["if_else", "sign", "sqrt", "abs"]),
         )
 
     @staticmethod
@@ -1005,6 +1062,7 @@ class MatrixUnary:
             "tail",
             {"d": d, "lower": lower, "upper": upper, "newval": newval},
             f"tail(ts_rank({x}, {d}), lower={lower:.4f}, upper={upper:.4f}, newval={newval:.4f})",
+            implicit_profile(["ts_rank"]),
         )
 
     @staticmethod
@@ -1035,6 +1093,7 @@ class MatrixUnary:
             "trade_when",
             {"t1": t1, "t2": t2, "d1": d1, "d2": d2},
             f"trade_when(ts_rank({x}, {d1}) > {t1}, {x}, abs(ts_zscore({x}, {d2})) < {t2})",
+            implicit_profile(["ts_rank", "ts_zscore", "abs"]),
         )
 
     @staticmethod
@@ -1489,6 +1548,7 @@ class MatrixUnary:
             "winsorize",
             {"std": std, "window": window},
             f"winsorize(ts_rank({x},{window}), std={std:.4f})",
+            implicit_profile(["ts_rank"]),
         )
 
     @staticmethod
@@ -1535,6 +1595,7 @@ class Vector:
         name: str,
         config: dict[str, int | bool | float | str],
         expression: str,
+        implicit: list[dict[str, str]] | None = None,
     ) -> tuple[str, OperatorProfile]:
         """Assemble the expression and profile of one built operator call.
 
@@ -1542,12 +1603,15 @@ class Vector:
         draw produced. For VECTOR, config is always empty since no parameters
         are sampled.
 
+        `implicit` lists the operator calls this one brings along on its own.
+
         Returns a tuple of (expression, profile).
         """
         profile: OperatorProfile={
             "category": "VECTOR",
             "name": name,
             "config": config,
+            "implicit": implicit or [],
         }
         return (expression, profile)
 
@@ -1664,12 +1728,14 @@ class Group:
         name: str,
         config: dict[str, int | float | bool],
         expression: str,
+        implicit: list[dict[str, str]] | None = None,
     ) -> tuple[str, OperatorProfile]:
         """Assemble the expression and profile of one built operator call."""
         profile: OperatorProfile = {
             "category": "GROUP",
             "name": name,
             "config": config,
+            "implicit": implicit or [],
         }
         return (expression, profile)
     
@@ -1706,6 +1772,28 @@ class Group:
         nan_group_bool = "True" if nan_group == 1 else "False"
         return skip_both_bool, nan_group_bool
     
+    @staticmethod
+    def _implicit_by_mode(mode: int, weight_mode: int | None = None) -> list[str]:
+        """The operator calls a group operator brings along, given its mode.
+
+        Mode 1 groups by the field as it is. Mode 2 densifies it. Mode 3
+        buckets the value into a quantile group. Mode 4 crosses that bucket
+        with the platform's own group field, and mode 5 densifies the result.
+        """
+        if mode == 1:
+            implicit = []
+        elif mode == 2:
+            implicit = ["densify"]
+        elif mode == 3:
+            implicit = ["densify", "bucket", "rank"]
+        else:
+            implicit = ["densify", "group_cartesian_product", "bucket", "rank"]
+        # The weight of group_mean is one of five expressions, and the fifth is
+        # a day counter rather than a field.
+        if weight_mode == 5:
+            implicit = implicit + ["ts_step"]
+        return implicit
+
     @staticmethod
     def group_backfill(
         x: str,
@@ -1751,7 +1839,12 @@ class Group:
         else:
             expr = f"group_backfill({_x}, {group}, {d}, std = {std:.2f})"
         
-        return Group._profile("group_backfill", config, expr)
+        return Group._profile(
+            "group_backfill",
+            config,
+            expr,
+            implicit_profile(["ts_rank"] + Group._implicit_by_mode(mode)),
+        )
     
     @staticmethod
     def group_count(
@@ -1788,7 +1881,12 @@ class Group:
         else:
             expr = f"group_count({x}, {group})"
         
-        return Group._profile("group_count", config, expr)
+        return Group._profile(
+            "group_count",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode)),
+        )
     
     @staticmethod
     def group_mean(
@@ -1838,7 +1936,12 @@ class Group:
         else:
             expr = f"group_mean({x}, {weight}, {group})"
         
-        return Group._profile("group_mean", config, expr)
+        return Group._profile(
+            "group_mean",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode, weight_mode)),
+        )
     
     @staticmethod
     def group_neutralize(
@@ -1875,7 +1978,12 @@ class Group:
         else:
             expr = f"group_neutralize({x}, {group})"
         
-        return Group._profile("group_neutralize", config, expr)
+        return Group._profile(
+            "group_neutralize",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode)),
+        )
     
     @staticmethod
     def group_rank(
@@ -1912,7 +2020,12 @@ class Group:
         else:
             expr = f"group_rank({x}, {group})"
         
-        return Group._profile("group_rank", config, expr)
+        return Group._profile(
+            "group_rank",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode)),
+        )
     
     @staticmethod
     def group_scale(
@@ -1949,7 +2062,12 @@ class Group:
         else:
             expr = f"group_scale({x}, {group})"
         
-        return Group._profile("group_scale", config, expr)
+        return Group._profile(
+            "group_scale",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode)),
+        )
     
     @staticmethod
     def group_std_dev(
@@ -1986,7 +2104,12 @@ class Group:
         else:
             expr = f"group_std_dev({x}, {group})"
         
-        return Group._profile("group_std_dev", config, expr)
+        return Group._profile(
+            "group_std_dev",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode)),
+        )
     
     @staticmethod
     def group_sum(
@@ -2023,7 +2146,12 @@ class Group:
         else:
             expr = f"group_sum({x}, {group})"
         
-        return Group._profile("group_sum", config, expr)
+        return Group._profile(
+            "group_sum",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode)),
+        )
     
     @staticmethod
     def group_zscore(
@@ -2060,4 +2188,9 @@ class Group:
         else:
             expr = f"group_zscore({x}, {group})"
         
-        return Group._profile("group_zscore", config, expr)
+        return Group._profile(
+            "group_zscore",
+            config,
+            expr,
+            implicit_profile(Group._implicit_by_mode(mode)),
+        )

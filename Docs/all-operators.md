@@ -391,6 +391,7 @@ OperatorProfile = TypedDict(
         "category": str,
         "name": str,
         "config": dict[str, int | bool | float | str],
+        "implicit": list[dict[str, str]],
     },
 )
 ```
@@ -400,13 +401,29 @@ OperatorProfile = TypedDict(
 | `category` | `str` | Bucket của operator (e.g. `MATRIX_BINARY`, `MATRIX_UNARY`) |
 | `name` | `str` | Tên operator theo đúng cách platform viết |
 | `config` | `dict[str, int \| bool \| float \| str]` | Tất cả tham số **được rút ngẫu nhiên** hoặc **truyền vào** — đủ để reproduce bit-exact expression |
+| `implicit` | `list[dict[str, str]]` | Các operator call mà operator này **kéo theo sẵn** — không có `config` vì tham số cố định bởi definition của platform |
+
+**Operator kéo theo (`implicit`):** một số operator của platform tự chứa lời gọi operator khác trong definition của nó. Những lời gọi đó **không** xuất hiện trong `get()` nên phải khai báo tường minh:
+
+| Operator | Kéo theo |
+| --- | --- |
+| `group_*` mode 2 | `densify` |
+| `group_*` mode 3 | `densify`, `bucket`, `rank` |
+| `group_*` mode 4, 5 | `densify`, `group_cartesian_product`, `bucket`, `rank` |
+| `group_backfill` | `ts_rank` (ngoài các operator theo mode) |
+| `group_mean` weight mode 5 | `ts_step` (ngoài các operator theo mode) |
+| `if_else` | `ts_rank` (mỗi operand chưa được rank) |
+| `trade_when` | `ts_rank`, `ts_zscore`, `abs` |
+| `tail` | `ts_rank` |
+| `winsorize` | `ts_rank` |
+| `sqrt` | `if_else`, `sign`, `sqrt`, `abs` |
 
 Ví dụ:
 
 ```python
 expression, profile = MatrixBinary.ts_regression("field_a", "field_b")
 # expression = 'ts_regression(field_b, field_a, 70, lag=0, rettype=1)'
-# profile = {"category": "MATRIX_BINARY", "name": "ts_regression", "config": {"d": 70, "lag": 0, "rettype": 1}}
+# profile = {"category": "MATRIX_BINARY", "name": "ts_regression", "config": {"d": 70, "lag": 0, "rettype": 1}, "implicit": []}
 ```
 
 ### 8.2 Reproducibility: signature nhận parameters như optional arguments
@@ -635,6 +652,48 @@ Bucket `BOOLEAN` không có builder vì phần lớn operator trong đó là **s
 | 3 | `if_else` (`dx`, `dy`) và `trade_when` (`d1`, `d2`) rút window từ `[60, 252]` viết thẳng trong hàm, khác `WINDOW_DAYS = (1, 252)` của các `ts_*`. | Theo yêu cầu user, chưa có hằng chung. |
 | 4 | `OperatorProfile.config` khai báo `dict[str, int \| bool]` nhưng thực tế chứa cả `float` và `str`. | Chưa sửa. |
 
-### 10.4 Giai đoạn 2
+### 10.4 Profile của một expression
+
+`ExpressionBuilder.build` trả tuple `(expression, profile)`. Profile mô tả **toàn bộ** expression, dựng bằng cách đi trên cây đã build chứ không parse text render.
+
+```python
+{
+  "expression": "...",
+  "operator_count": 13,
+  "data": {
+    "fields": [ {metadata catalog đầy đủ của từng field, cộng "type"} ],
+    "group":  {metadata catalog đầy đủ của GROUP field, hoặc null}
+  },
+  "levels": {
+    "leaf": { "<tên operator>": [ {profile của lần gọi}, ... ] },
+    "join": { ... },
+    "post": { ... }
+  },
+  "counts": {
+    "operators_per_level": {"leaf": 6, "join": 2, "post": 1},
+    "operators_per_category": {"MATRIX_UNARY": 3, "GROUP": 1, ...},
+    "n_data_fields": 3,
+    "n_distinct_operators": 5
+  }
+}
+```
+
+**Ba tầng (`levels`):**
+
+| Tầng | Nội dung |
+| --- | --- |
+| `leaf` | Operator bọc **một field** — `vec_*` của field VECTOR, rồi 0..2 wrapper `MATRIX_UNARY` / `GROUP` |
+| `join` | Operator **ghép** các node — `MATRIX_BINARY`, `VARIADIC`, và operator kéo theo của chúng |
+| `post` | Operator phủ **lên cây đã join** — transform của giá trị đã kết hợp |
+
+**`data`:** `fields` là các field làm lá của expression, mỗi field kèm **19 cột metadata** từ catalog (`fieldid`, `type`, `field_description`, `categoryid`, `coverage`, `dateCoverage`, `dataset_valueScore`, `pyramidMultiplier`, …). `group` là field GROUP mà mọi operator `group_*` dùng để gom nhóm.
+
+**Hai điểm cần biết khi đọc profile:**
+
+1. **Số lần gọi trong profile ≠ số lần xuất hiện trong text.** Một số operator render lại argument của nó (`group_*` mode 3/4/5 nhúng `x` vào `bucket(rank(x))`; `trade_when` render 3 lần; `if_else` render operand 2 lần), nên text đếm *rendered occurrence* còn profile đếm *logical call*. Invariant đúng để verify profile là **coverage hai chiều theo tên operator**, không phải theo số lần.
+
+2. **`rank` của scale-fix không có trong profile.** Khi join dùng operator scale-sensitive (`add`, `subtract`, `multiply`, `signed_power`, `max`, `min`), generator bọc mỗi operand trong `rank(x)` để chúng cùng scale. Đó là **scaffolding bắt buộc để tạo lovel**, không phải lựa chọn của generator, nên nó không được ghi vào profile. Nếu có, nó sẽ chiếm ~40% lượt operator và làm mờ phần thông tin còn lại.
+
+### 10.5 Giai đoạn 2
 
 Phạm vi giai đoạn 2 chưa được ghi ở file nào trong repo. Mục này để trống đến khi user chốt.

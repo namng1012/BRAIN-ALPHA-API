@@ -302,6 +302,24 @@ Hai scope có cùng `catalog_frame_id` nghĩa là cùng tập field; archive MAT
 
 `sample_field_ids(seed=None)` lấy entropy từ OS CSPRNG (`os.urandom(8)`), không gắn vào hằng số cố định. Seed thực tế được in ra cùng kết quả để replay bit-exact. **Cùng seed trên hai snapshot khác sẽ cho field khác** — đó là hành vi đúng, vì seed chỉ có nghĩa khi đi kèm `frame_id`.
 
+### 7.3 Draw trả về metadata đầy đủ
+
+`sample_field_ids` trả **một DataFrame, một dòng cho mỗi field được bốc**, mang **toàn bộ 19 cột** mà archive giữ: `fieldid`, `type`, `field_description`, `categoryid`, `categoryname`, `subcategoryid`, `subcategoryname`, `datasetid`, `datasetname`, `dataset_description`, `coverage`, `dateCoverage`, `dataset_valueScore`, `pyramidMultiplier`, `region`, `delay`, `universe`, `dateCreated`, `dataset_dateUpdated`. Thứ tự dòng là thứ tự bốc.
+
+Áp dụng cho cả ba field type (`MATRIX`, `VECTOR`, `GROUP`) — không có ngoại lệ nào.
+
+Trước đây hàm trả `list[str]` (chỉ `fieldid`) và bỏ phần metadata vốn đã nằm trên đĩa. Metadata đó là đầu vào cho tầng heuristic sau này.
+
+**Chi phí đo được** (`USA_1_TOP3000`, archive MATRIX, 36 854 dòng):
+
+| Cách đọc | Thời gian | Memory |
+| --- | --- | --- |
+| `fieldid` only (cách cũ) | 0.016 s | 2.9 MB |
+| sample n=6, đủ 19 cột | 0.173 s | — |
+| toàn bộ 19 cột, toàn archive | 0.332 s | 69 MB |
+
+Đọc metadata cho vài dòng gần như miễn phí so với trước: mỗi cột là một member riêng của `.npz`, nên `np.load` phải decompress **cả cột** bất kể lấy bao nhiêu dòng. Đọc cột `field_description` (text dài) cho 6 dòng tốn gần bằng đọc 19 cột cho 36 854 dòng.
+
 ---
 
 

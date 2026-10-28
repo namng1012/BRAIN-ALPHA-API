@@ -625,3 +625,20 @@ Dùng lại field (một field xuất hiện ở nhiều slot): bỏ vì đo cho
 **Impact on reported results:** mọi expression sinh ra đều khác kiến trúc cũ. Lever post-join wrapper làm mean operator count tăng từ 14.2 lên 20.5 ở N=3 (tỉ lệ expression có transform-above-join 56.3% → 85.7%); lever variadic làm mean operator count giảm từ 14.2 xuống 13.1 ở N=3 và từ 28.5 xuống 26.4 ở N=6, vì một lệnh `max(a,b,c)` tốn 1 operator thay vì 2 join nhị phân. Nếu reviewer hỏi tại sao ngân sách operator thay đổi, đây là con số.
 
 **Sentiment:** 8 — quyết định dựa trên phép đo, và cả hai lever đều mở vị trí biểu thức mà kiến trúc cũ không sinh ra được.
+
+## 2026-10-28T17:05:57Z | methodology | score: 8 | tag: expression-profile
+
+**Tags:** expression-profile
+
+**Decision:** Profile của một expression gồm 3 phần: `data` (field + metadata catalog đầy đủ, gồm cả GROUP field), `levels` (dict theo tầng leaf/join/post → dict tên operator → list profile của các lần gọi), `counts` (operators per level, per category, số field, số operator khác nhau). Operator nội bộ của platform operator đưa vào profile với `config` rỗng, khai báo tường minh qua trường `implicit`. `rank` của scale-fix **không** vào profile.
+
+**Alternatives considered:**
+Profile là text đã render: bỏ vì không phân biệt được operator do generator chọn với operator do platform kéo theo, và không mang config.
+Mọi operator trong text (kể cả rank của scale-fix) vào profile: bỏ vì `rank` của scale-fix xuất hiện ở *mọi* join scale-sensitive — nó là scaffolding bắt buộc để tạo lovel, không phải lựa chọn của generator. Đếm nó sẽ chiếm ~40% lượt operator và làm mờ phần thông tin còn lại. Quyết định này theo chỉ dẫn tag `scale-fix` trong `Diary/code-technique.md`.
+Đếm operator theo số lần render để khớp text: bỏ vì operator lặp argument (`group_*` mode 3/4/5 nhúng lại `x` vào `bucket(rank(x))`; `trade_when` render 3 lần) khiến số lần render ≠ số lần gọi logic. Invariant đúng là coverage hai chiều theo **tên** operator.
+
+**Rationale:** profile là đầu vào cho tầng heuristic/analysis sau, nên nó phải phản ánh **cái đã dựng** (logical call + config của nó), không phải cái đã render. Tách `implicit` khỏi `config` giữ nguyên nguyên tắc "config = tham số do draw sinh ra"; `implicit` là operator bị kéo theo, không có tham số do ta chọn.
+
+**Impact on reported results:** verify bằng coverage hai chiều theo tên operator trên 200 expression ngẫu nhiên (N=1,2,3,6,12): 0 vi phạm. Trước khi thêm `implicit`, sai lệch là 87/100 expression — chủ yếu do `group_*` mode 3/4/5 (3/5 xác suất). Nếu reviewer hỏi "tại sao số operator trong profile ≠ số lần xuất hiện trong text", câu trả lời là operator lặp argument.
+
+**Sentiment:** 8 — quyết định về ranh giới "operator nào thuộc về profile" ảnh hưởng mọi thống kê tầng sau, và chỉ đúng khi invariant verify được.

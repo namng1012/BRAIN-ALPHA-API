@@ -1685,3 +1685,53 @@
 **Open questions:** ngân sách operator của platform có tính cả so sánh infix của bucket BOOLEAN không — `OPERATOR_CALL` chỉ match function call, nên một expression có điều kiện boolean bị đếm thiếu. 10 operator BOOLEAN chưa có builder nên chưa dùng được. Chưa có local oracle để biết lever nào tăng IC thực.
 
 **Sentiment:** 8 — phân tích bão hòa bằng số đo thay vì trực giác, và hai lever đều mở được vị trí biểu thức mà kiến trúc cũ không với tới.
+
+## 2026-10-28T16:12:17Z | chat-summary | score: 7 | tag: field-metadata
+
+**Tags:** field-metadata
+
+**Request:** `sample_field_ids` phải trả về đủ metadata (một dòng một field, đủ cột) thay vì chỉ `field_ids`; áp dụng cho cả GROUP và VECTOR.
+
+**Outcome:** `sample_field_ids` đổi kiểu trả về từ `list[str]` sang `pd.DataFrame` với toàn bộ 19 cột của archive, theo thứ tự draw. `ExpressionBuilder.draw_fields` trả thêm frame metadata; `group_id` và các chỗ index `[0]` được sửa theo. Đo chi phí: đọc metadata cho vài dòng gần như miễn phí (0.173 s cho n=6 đủ 19 cột) vì mỗi cột là một member riêng của `.npz` nên phải decompress cả cột.
+
+**Files touched:**
+- `Functions/data.py` — `sample_field_ids` trả DataFrame
+- `main.py` — `_sample`, `draw_fields`, `__init__` (`group_id`), `main()` (in profile)
+- `Docs/data-field-sampling.md` — thêm §7.3
+- `Diary/conversation-log.md`, `Diary/code-technique.md`
+
+**Open questions:** tầng heuristic sau sẽ dùng cột nào — `field_description` là text tự nhiên (khó định lượng), `categoryid`/`subcategoryid`/`datasetid` là phân loại, `coverage`/`dateCoverage`/`dataset_valueScore`/`pyramidMultiplier` là số. Chưa chốt.
+
+**Sentiment:** 7 — thay đổi nhỏ về code nhưng mở khóa tầng tiếp theo.
+
+## 2026-10-28T17:05:57Z | chat-summary | score: 8 | tag: expression-profile
+
+**Tags:** expression-profile
+
+**Request:** `build` phải trả thêm profile (dict) của expression: metadata của các field (matrix/vector/group), và profile của operator theo từng level — mỗi level là dict chứa profile của các operator (lấy từ `get()` của các class trong `Functions/operators.py`).
+
+**Outcome:** `build` trả `(expression, profile)`. Profile có 3 phần: `data` (field + metadata catalog đầy đủ + GROUP field), `levels` (leaf/join/post → tên operator → list call profile), `counts`. Cây build được giữ lại đi để thu profile (thay vì parse text render). Thêm trường `implicit` vào `OperatorProfile` để khai báo operator nội bộ của platform operator (`densify`, `bucket`, `ts_rank` của `if_else`/`trade_when`/`winsorize`/`tail`, `if_else`/`sign`/`abs` của `sqrt`, `ts_step` của `group_mean` weight mode 5) — theo lựa chọn "include_no_config". `rank` của scale-fix **không** vào profile theo chỉ dẫn tag `scale-fix`.
+
+**Files touched:**
+- `main.py` — `build` trả tuple, thêm `_profile`/`_walk`/`_counts`/`_field_metadata`/`_group_metadata`/`_rank_wrap`, node dict thay string trong `_leaf`/`_join_round`/`_variadic_join`/`_post_wrap`, `main()` in profile JSON
+- `Functions/operators.py` — `OperatorProfile.implicit`, `IMPLICIT_CATEGORY`, `implicit_profile()`, `Group._implicit_by_mode()`, gắn implicit vào `if_else`/`trade_when`/`tail`/`sqrt`/`winsorize`/`group_*`
+- `Diary/conversation-log.md`, `Diary/code-technique.md`, `Diary/methodology.md`
+
+**Open questions:** profile chưa có mốc thời gian hay seed để replay. `sample_field_ids` vẫn tự sinh seed từ OS entropy nên chưa replay được một expression cụ thể. Chưa biết tầng heuristic sau cần cột nào của metadata field.
+
+**Sentiment:** 8 — profile là đầu vào cho tầng phân tích sau, và ranh giới "operator nào thuộc về profile" phải đúng ngay từ đầu.
+
+## 2026-10-28T17:07:47Z | chat-summary | score: 5 | tag: expression-profile
+
+**Tags:** expression-profile
+
+**Request:** Báo kết quả job verify chạy nền và làm follow-up nếu cần.
+
+**Outcome:** Job verify coverage hai chiều (chạy nền) hoàn tất: **250 mẫu, 0 vi phạm** — mọi operator có trong text đều có trong profile và ngược lại, sau khi trừ `rank` của scale-fix. Số này bổ sung cho lần verify 150 mẫu đã chạy trước đó. Không cần follow-up: `main.py` chạy exit 0, profile JSON-serialisable, mọi field trong `data.fields` mang đủ metadata catalog.
+
+**Files touched:**
+- `Diary/conversation-log.md`
+
+**Open questions:** không đổi so với entry trước.
+
+**Sentiment:** 5 — breadcrumb xác nhận, không có quyết định mới.
