@@ -1910,3 +1910,372 @@
 **Open questions:** none
 
 **Sentiment:** 2 — dọn file thừa.
+
+## 2026-10-29T15:27:07Z | chat-summary | score: 3
+
+**Request:** Đọc kỹ ACE_API__Gold_/ace_lib.py và cho biết có bao nhiêu def.
+
+**Outcome:** 36 def: 31 top-level function, 3 method của class SingleSession (__new__, __init__, get_relogin_lock), 2 nested func(x) cục bộ trong simulate_alpha_list và simulate_alpha_list_multi. 1 class, 0 async def.
+
+**Files touched:**
+- Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 3 — đếm số, không sửa code reference.
+
+## 2026-10-29T15:32:31Z | chat-summary | score: 7 | tag: ace-lib-docs
+
+**Tags:** ace-lib-docs
+
+**Request:** Tạo Docs/Brain-Instruction-Code.md ghi lại toàn bộ hiểu biết về ACE_API__Gold_/ace_lib.py, mỗi def có mục đích.
+
+**Outcome:** Tạo file mới 12 mục: tổng quan và hằng số, SingleSession, xác thực và session, mô tả alpha, chạy simulation, đánh giá alpha, truy vấn catalog, tiện ích HTTP, bảng tóm tắt 36 def, điểm cần biết trước khi dùng (15 bất đối xứng đã ghi nhận + so sánh với dự án hiện tại), cách dùng. Chỉ đọc reference code, không sửa.
+
+**Files touched:**
+- Docs/Brain-Instruction-Code.md (mới)
+- Diary/conversation-log.md
+- Diary/code-technique.md
+- Diary/methodology.md
+
+**Open questions:** none
+
+**Sentiment:** 7 — tài liệu tham khảo để viết code mới đúng contract của platform.
+
+## 2026-10-29T15:47:40Z | chat-summary | score: 6
+
+**Request:** Thêm biến `mode` (0/1, random như `dx`) vào `if_else`: 0 giữ `if_else(cond, _x, _y)`, 1 dùng `if_else(cond, 1, 0)`. Sau đó: bản `1, 0` đơn điệu, bọc `ts_sum` với `dz` random 10 đến 52.
+
+**Outcome:** `MatrixBinary.if_else` có thêm `mode` và `dz`. Mode 1 render `ts_sum(if_else(cond, 1, 0), dz)`, ghi `mode`, `dz` vào `config` và `ts_sum` vào `implicit`. Test 3000 lần: mode 50/50, `dz` phủ 10..52, `replicate` khớp từng lần. Docs/all-operators.md đã cập nhật.
+
+**Files touched:**
+- Functions/operators.py
+- Docs/all-operators.md
+- Diary/conversation-log.md
+- Diary/code-technique.md
+- Diary/methodology.md
+
+**Open questions:** profile cũ không có `mode` khi `replicate` sẽ rút `mode` ngẫu nhiên; chưa chạy lại vòng build đầy đủ trong main.py (probe bị dừng vì chạy quá lâu).
+
+**Sentiment:** 6 — đổi hình dạng expression của một operator trong pool.
+
+## 2026-10-29T15:56:38Z | chat-summary | score: 7
+
+**Request:** Đọc `how_to_use.py` (lọc `valueScore`) và `main.py` (khối `MIN_COVERAGE`), rồi kiểm soát để `valueScore` mặc định nhỏ hơn 4.
+
+**Outcome:** Thêm `MAX_VALUE_SCORE = 4` trong `main()`, truyền vào `CatalogBuilder(max_value_score=...)`. Cắt `dataset_valueScore < 4` áp dụng lúc bốc qua `drawable_positions`, dùng chung cho `sample_field_ids` và `_pool_size`. Đã kiểm: pool và số dòng bốc khớp, max score sau cắt là 3.0, không cap thì bit-exact với `np.arange`.
+
+**Files touched:**
+- main.py
+- Functions/data.py
+- Docs/data-field-sampling.md
+- Diary/conversation-log.md
+- Diary/code-technique.md
+- Diary/methodology.md
+
+**Open questions:** `< 4` loại luôn field của dataset score 4 (cắt chặt, theo cách viết `<` của user); GROUP ở GLB_1_TOP3000 trống sau theme nên không kiểm được draw GROUP.
+
+**Sentiment:** 7 — đổi tập field mà mọi alpha được bốc từ đó.
+
+## 2026-10-29T16:01:03Z | chat-summary | score: 7
+
+**Request:** Dùng `operator_count` để kiểm soát số operator trong `build`; nếu vượt thì generate lại, không báo lỗi, hàm bắt buộc phải sinh ra expression.
+
+**Outcome:** `build` không còn raise khi n quá lớn và không còn trả cây vượt 64 làm fallback. Nó cắt n về 22, thử các level và allowance như cũ, và nếu không vừa thì bỏ lá cuối rồi thử lại. Đo n = 1..100: mọi expression <= 64, profile khớp text, `replicate` khớp từng ký tự.
+
+**Files touched:**
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+- Diary/code-technique.md
+- Diary/methodology.md
+
+**Open questions:** số field trong expression có thể nhỏ hơn số field truyền vào; `main()` chưa in cảnh báo việc này. Nguyên nhân vượt 64 ở n = 22 (`vec_*` ngoài `JOIN_COST`) vẫn chưa kiểm.
+
+**Sentiment:** 7 — đổi hợp đồng của `build` (luôn trả expression hợp lệ).
+
+## 2026-10-29T16:06:08Z | chat-summary | score: 3
+
+**Request:** Chuyển `OPERATOR_LIMIT = 64` xuống `def main()`.
+
+**Outcome:** Hằng số nằm trong `main()` cùng các hằng cấu hình khác, truyền vào `ExpressionBuilder(catalog, scope, theme, operator_limit)` và lưu thành `self.operator_limit`. Kiểm limit 64 và 20 với n = 1, 5, 30: operator_count <= limit, `replicate` khớp.
+
+**Files touched:**
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 3 — di chuyển cấu hình, hành vi không đổi.
+
+## 2026-10-29T16:10:43Z | chat-summary | score: 6
+
+**Request:** Tìm nguyên nhân vì sao draw 5 field mà expression chỉ ra `signed_power(rank(a), rank(b))`, chưa code.
+
+**Outcome:** `OPERATOR_LIMIT` trong `main()` đang là 5, nên `build` cắt n = 5 // JOIN_COST + 1 = 2 và chỉ dùng 2 field đầu. Đo 40 lần mỗi limit: limit 5 dùng 2 field, limit 6 dùng 3 (hiếm 2), limit 9 dùng 4 (hiếm 3). `JOIN_COST = 3` là cận trên: max(rank, rank, rank) tốn 4 operator cho 3 field, nên cắt n quá tay ở limit nhỏ. `main()` in `field:` cho cả field đã draw nhưng không dùng.
+
+**Files touched:**
+- Diary/conversation-log.md (không sửa code)
+
+**Open questions:** tính n tối đa từ chi phí join tối thiểu thật hay để vòng bỏ lá tự cắt; có in số field thật trong `main()` không.
+
+**Sentiment:** 6 — làm rõ hành vi `build` ở limit nhỏ, chưa đổi code.
+
+## 2026-10-29T16:14:14Z | chat-summary | score: 8
+
+**Request:** profile của `build` không được khác expression, profile phải như mã gen của expression.
+
+**Outcome:** Chưa sửa code, chỉ audit 150 mẫu (USA_1_TOP3000, n = 1..25, limit 64). `replicate` khớp 100%, và field trong profile luôn khớp field trong text. Ba chỗ profile không khớp expression: (1) `data.group` được ghi dù không group operator nào dùng (37/160 mẫu); (2) tên operator trong text nhiều hơn profile do `rank` scaffolding và do operator REPEATING render lại cây con, còn profile ghi mỗi operator một lần; (3) `main()` in toàn bộ field đã draw, không phải field profile dùng.
+
+**Files touched:**
+- Diary/conversation-log.md (không sửa code)
+
+**Open questions:** profile ghi theo "operator đã build" hay theo "operator xuất hiện trong text"; `data.group` chỉ ghi khi dùng; `main()` in theo profile.
+
+**Sentiment:** 8 — liên quan hợp đồng giữa profile và expression, ảnh hưởng stage heuristic phía sau.
+
+## 2026-10-29T16:18:48Z | chat-summary | score: 8
+
+**Request:** Cho recommend đúng đắn nhất về việc profile phải khớp expression (user trả lời AskQuestion bằng yêu cầu recommend, dùng thuật ngữ).
+
+**Outcome:** Đề xuất mô hình genotype/phenotype: `tree` là source of truth gồm cả scaffold (`origin`), `levels`/`counts` theo node, thêm view `rendered` có multiplicity đo từ text, `data.group` chỉ ghi khi dùng, `main()` in theo profile, 5 invariant kiểm bằng test. Chưa sửa code.
+
+**Files touched:**
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** user chưa đồng ý thứ tự làm; schema profile đổi nên docs §5 và all-operators §10.4 phải sửa theo.
+
+**Sentiment:** 8 — định nghĩa hợp đồng profile/expression cho stage heuristic.
+
+## 2026-10-29T16:20:47Z | chat-summary | score: 6
+
+**Request:** Nhắc lại rằng `rank` trong scale-fix dùng để chuẩn hóa về một khung, không xóa được.
+
+**Outcome:** Xác nhận `rank` giữ nguyên trong expression. Chỉnh đề xuất profile: `rank` scale-fix được ghi vào `tree` và `levels` như operator thường (MATRIX_UNARY), nhãn `role: "normalize"` chỉ để đọc, không để lọc bỏ. Chưa sửa code, chờ user xác nhận phần còn lại của kế hoạch.
+
+**Files touched:**
+- Diary/conversation-log.md
+
+**Open questions:** user chưa xác nhận kế hoạch (data.group, rendered, main() in theo profile, invariant).
+
+**Sentiment:** 6 — ràng buộc từ user sửa hướng thiết kế profile.
+
+## 2026-10-29T16:21:44Z | chat-summary | score: 6
+
+**Request:** rank scale-fix không nằm trong profile, nó là nguyên tắc cố định.
+
+**Outcome:** Rút lại đề xuất đưa rank scale-fix vào levels/counts. Giữ thiết kế hiện tại: rank scale-fix không ở trong profile, chỉ là node rank rỗng trong tree cho replicate. Invariant so profile với text trừ các rank scale-fix suy ra từ quy tắc. Chưa sửa code.
+
+**Files touched:**
+- Diary/conversation-log.md
+
+**Open questions:** user chưa xác nhận kế hoạch còn lại (data.group, rendered, main() in theo profile, invariant).
+
+**Sentiment:** 6 — ràng buộc từ user, đúng với Docs/expression-builder.md §5.5.
+
+## 2026-10-29T16:22:33Z | chat-summary | score: 3
+
+**Request:** Giải thích đơn giản (ELI20) kế hoạch định làm.
+
+**Outcome:** Giải thích lại kế hoạch bằng ngôn ngữ đời thường: sửa data.group, thêm view rendered, main() in theo profile, viết test đối chiếu. Chưa sửa code.
+
+**Files touched:**
+- Diary/conversation-log.md
+
+**Open questions:** user chưa xác nhận kế hoạch.
+
+**Sentiment:** 3 — giải thích lại, không có quyết định mới.
+
+## 2026-10-29T16:28:37Z | chat-summary | score: 8
+
+**Request:** Báo lỗi yêu cầu user tăng OPERATOR_LIMIT lên ít nhất POST_WRAPPERS * n thay vì bỏ field.
+
+**Outcome:** Đồng ý hướng raise, nhưng POST_WRAPPERS * n quá thấp (n = 22 cho 44, sàn thật có lúc 78). Sàn đúng là 3(n-1) + V (V = số lá VECTOR), đo khớp chính xác. `build` raise ValueError nêu sàn khi operator_limit < sàn, không còn bỏ field; thay lại cơ chế cắt n của lượt trước. Đo: limit = sàn luôn vừa đủ n field, sàn - 1 luôn raise.
+
+**Files touched:**
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** OPERATOR_LIMIT trong main() hiện là 5, n = 5 sẽ raise tới khi user tăng lên; main() chưa in theo profile, data.group chưa sửa.
+
+**Sentiment:** 8 — đổi hợp đồng build: không bao giờ bỏ field.
+
+## 2026-10-29T16:39:40Z | chat-summary | score: 8
+
+**Request:** Floor dùng số VECTOR draw ngẫu nhiên nên tỷ lệ báo lỗi lớn; đổi thành JOIN_COST * (n - 1) + n, giải thích JOIN_COST, red-team trước khi sửa.
+
+**Outcome:** Red-team xác nhận: V ngẫu nhiên khiến cùng một limit lúc raise lúc không (n = 5, limit 14: raise 23/40). Floor = 4n - 3 chỉ phụ thuộc n, worst case toàn VECTOR luôn vừa (n = 1..22). Đã sửa `build` và docs. JOIN_COST = 3: join add/subtract/multiply/signed_power tốn 1 binary + 2 rank scale-fix.
+
+**Files touched:**
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** OPERATOR_LIMIT trong main() là 14 trong khi n = 5 cần 17 nên sẽ raise; data.group ghi thừa và main() in theo draw chưa sửa.
+
+**Sentiment:** 8 — đổi ngưỡng raise, quyết định đánh đổi giữa nhất quán và tối thiểu.
+
+## 2026-10-29T16:42:30Z | chat-summary | score: 3
+
+**Request:** Chuyển `JOIN_COST = 3` và `POST_WRAPPERS = 2` xuống `def main()`.
+
+**Outcome:** Hai hằng nằm trong `main()`, truyền vào `ExpressionBuilder(catalog, scope, theme, operator_limit, join_cost, post_wrappers)` và lưu thành `self.join_cost`, `self.post_wrappers`. Mọi chỗ dùng cũ trong `build`, `_post_wrap` đã đổi. Kiểm post_wrappers 0 và 2, n = 1, 2, 5, 10, limit 4n - 3: expression vừa, đủ n field, `replicate` khớp. Hành vi không đổi.
+
+**Files touched:**
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+
+**Open questions:** `OPERATOR_LIMIT` trong main() vẫn 14 trong khi n = 5 cần 17; data.group ghi thừa và main() in theo draw chưa sửa.
+
+**Sentiment:** 3 — di chuyển cấu hình, hành vi không đổi.
+
+## 2026-10-29T16:47:38Z | chat-summary | score: 7
+
+**Request:** Tìm công thức tính cả POST_WRAPPERS vào floor.
+
+**Outcome:** Chưa sửa code. Đo: post wrapper tốn k * c + o operator (c = chi phí cây bên dưới); sqrt k = 4, o = 5 là xấu nhất. Worst case P wrapper trên cây floor: 4^P * floor + 5(4^P - 1)/3 = 297 với n = 5, P = 2, vượt xa trần platform 64 (đã vượt từ n = 2: 105). Vì vậy không thể đưa POST_WRAPPERS vào floor. _post_wrap đã tự bỏ wrapper không vừa: ở limit = floor, 300 build có 0 vi phạm limit, 130/300 vẫn áp được >= 1 wrapper.
+
+**Files touched:**
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** giữ post wrapper là best-effort, hay để build dành riêng ngân sách cho post (đổi allowance).
+
+**Sentiment:** 7 — quyết định về hợp đồng floor, có số đo.
+
+## 2026-10-29T16:48:46Z | chat-summary | score: 3
+
+**Request:** Chốt lại là không cần đưa POST_WRAPPERS vào floor?
+
+**Outcome:** Xác nhận không cần: floor giữ `join_cost * (n - 1) + n`, post wrapper là best-effort vì `_post_wrap` tự bỏ wrapper làm vượt limit. Không đổi code.
+
+**Files touched:**
+- Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 3 — xác nhận quyết định đã ghi ở methodology.md.
+
+## 2026-10-29T16:54:15Z | chat-summary | score: 7
+
+**Request:** Bỏ join_cost, floor thành (POST_WRAPPERS + 1) * (n - 1) + n.
+
+**Outcome:** Red-team, chưa sửa code. Công thức chỉ đúng khi POST_WRAPPERS = 2 (trùng join_cost = 3). Với n = 5: P = 0, 1 cho floor 9, 13 thấp hơn sàn thật 17, và build ở các limit đó trả None; P = 3, 5 cho 21, 29 cao hơn sàn cần thiết. Phát hiện phụ: build rơi khỏi vòng for và trả None khi floor đánh giá thấp. Giữ join_cost.
+
+**Files touched:**
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** có muốn build raise thay vì trả None khi không level nào vừa (chỉ xảy ra khi floor sai).
+
+**Sentiment:** 7 — ngăn một công thức trùng hợp trở thành ngưỡng raise.
+
+## 2026-10-29T16:57:08Z | chat-summary | score: 8
+
+**Request:** Giữ join_cost theo ý tôi, nhưng ngưỡng cuối cùng phải là 64 vì BRAIN chỉ cho phép như vậy.
+
+**Outcome:** Thêm `PLATFORM_OPERATOR_LIMIT = 64` vào ExpressionBuilder. Constructor raise nếu operator_limit > 64; build raise nếu floor > 64 và nêu số field tối đa (16 với join_cost = 3); cuối build raise thay vì trả None khi không level nào vừa. Kiểm: limit 65 raise, n = 17 raise, n = 15, 16 toàn VECTOR ở limit 64 vừa, hồi quy n = 1, 2, 5, 10 ở 4n - 3 khớp replicate. Docs cập nhật; số liệu n = 22 cũ chỉ còn là lịch sử vì vượt 64.
+
+**Files touched:**
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+
+**Open questions:** OPERATOR_LIMIT trong main() là 14, n = 5 cần 17 nên vẫn raise; data.group ghi thừa và main() in theo draw chưa sửa.
+
+**Sentiment:** 8 — thêm trần cứng của platform và bỏ đường trả None.
+
+## 2026-10-29T17:10:18Z | chat-summary | score: 7
+
+**Request:** Thêm add, multiply, subtract vào VARIADIC_POOL (cùng max, min); divide không thuộc VARIADIC_POOL.
+
+**Outcome:** Thêm Variadic.add_, multiply_, subtract_ (filter=true, như bản MatrixBinary) và đăng ký trong Variadic.get; VARIADIC_POOL thành 5 operator. divide giữ ngoài pool, Variadic.get("divide") raise. Kiểm: 1200 build (n = 5, 8, 12, 16; limit 17 và 64) đều <= limit, đủ n field, replicate khớp từng ký tự; cả 5 operator đều được chọn (311 đến 366 lần mỗi operator). Timeout lần chạy đầu do 600 lần draw chậm (khoảng 0.18 giây mỗi lần), không phải treo.
+
+**Files touched:**
+- Functions/operators.py
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** platform chưa được xác nhận chấp nhận add/multiply/subtract từ ba operand (căn cứ chỉ là mô tả trong cache/operators.csv); divide vẫn ngoài BINARY_POOL (chưa được yêu cầu thêm); JOIN_COST = 2 trong main() thấp hơn 3 đo được.
+
+**Sentiment:** 7 — đổi phân phối cấu trúc expression.
+
+## 2026-10-29T17:17:43Z | chat-summary | score: 7
+
+**Request:** Đưa divide vào lại, thêm 0.0001 trong Functions/operators.py; dùng divide(x, y + 0.0001) để đỡ tốn operator; không cần kiểm tra.
+
+**Outcome:** MatrixBinary.divide render divide(x, y + 0.0001), không tốn thêm operator. divide vào BINARY_POOL và NON_COMMUTATIVE trong main.py. Bản nháp đầu dùng add(y, 0.0001) kèm implicit đã bị thay. Theo yêu cầu không chạy kiểm tra sau thay đổi này.
+
+**Files touched:**
+- Functions/operators.py
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** divide chưa nằm trong SCALE_SENSITIVE nên không rank-wrap; một assertion kiểm kế toán operator trong script thử bị fail trên build không chứa divide (nguyên nhân chưa điều tra, có thể do script thử).
+
+**Sentiment:** 7 — đổi pool và cách render một operator.
+
+## 2026-10-29T17:20:36Z | chat-summary | score: 8
+
+**Request:** Đổi divide thành divide({x}, {y} + {x} + 0.0001).
+
+**Outcome:** Dòng render đã có trong operators.py; cập nhật docstring, comment ở main.py, thêm divide vào REPEATING (x render hai lần), sửa Docs. Giá trị thành x / (x + y + 0.0001), không còn là x / y.
+
+**Files touched:**
+- Functions/operators.py
+- main.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+- Diary/methodology.md
+
+**Open questions:** platform có đếm `+` infix là operator không (OPERATOR_CALL chỉ đếm `name(`); mẫu số vẫn bằng 0 khi x + y = -0.0001.
+
+**Sentiment:** 8 — đổi ngữ nghĩa toán học của một operator.
+
+## 2026-10-29T17:26:21Z | chat-summary | score: 6
+
+**Request:** subtract không phải là VARIADIC.
+
+**Outcome:** Gỡ subtract khỏi VARIADIC_POOL (còn add, max, min, multiply), xoá Variadic.subtract_ và entry trong Variadic.get, sửa docstring và Docs. subtract vẫn là join nhị phân trong BINARY_POOL. Không chạy kiểm tra.
+
+**Files touched:**
+- main.py
+- Functions/operators.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+
+**Open questions:** none
+
+**Sentiment:** 6 — sửa lại quyết định pool ở lượt trước theo chỉ dẫn của user.
+
+## 2026-10-29T17:34:13Z | chat-summary | score: 8
+
+**Request:** cập nhật Diary.
+
+**Outcome:** Phiên này đổi pool join qua bốn lượt: thêm add, multiply, subtract vào VARIADIC_POOL; đưa divide vào BINARY_POOL với epsilon 0.0001 rồi đổi sang divide(x, y + x + 0.0001); gỡ subtract khỏi VARIADIC. Trạng thái cuối nằm trong entry methodology cùng timestamp; entry methodology cũ về subtract variadic và divide(x, y + 0.0001) đã bị thay thế. Sau thay đổi divide và gỡ subtract không chạy kiểm tra theo yêu cầu user.
+
+**Files touched:**
+- main.py
+- Functions/operators.py
+- Docs/expression-builder.md
+- Diary/conversation-log.md
+- Diary/methodology.md
+- Diary/code-technique.md
+
+**Open questions:**
+- Platform có chấp nhận `y + x + 0.0001` trong divide và có đếm `+` infix là operator không.
+- Platform có chấp nhận add/multiply từ ba operand trở lên không (chỉ có mô tả trong cache/operators.csv).
+- Một assertion kế toán operator trong script thử fail trên build không chứa divide (chưa điều tra, có thể do script thử bỏ sót rank scaffold).
+- JOIN_COST = 2 trong main() thấp hơn 3 đo được; n = 5 có thể raise với draw toàn VECTOR.
+
+**Sentiment:** 8 — gom thay đổi pool join và ngữ nghĩa divide, nhiều điểm chưa kiểm.

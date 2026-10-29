@@ -13,17 +13,14 @@ from Functions.random import IntegerSampler
 
 
 class ExpressionBuilder:
-    # Operator calls allowed in one FASTEXPR. Counted on the rendered text:
-    # nested calls count, and an operator that repeats its argument multiplies
-    # the cost of everything below it (sqrt^3(f) = 5 + 4*25 = 105).
-    OPERATOR_LIMIT = 64
     OPERATOR_CALL = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(")
 
     # One pool per bucket of Docs/all-operators.md §3 that has a builder.
-    # `divide` and `power` are left out: a zero denominator or a negative base
-    # with a fractional exponent fails at simulation time and costs a slot.
+    # `power` is left out: a negative base with a fractional exponent fails at
+    # simulation time and costs a slot. `divide` is in: its builder renders
+    # divide(x, y + x + 0.0001).
     BINARY_POOL = [
-        "add", "if_else", "multiply", "signed_power", "subtract",
+        "add", "divide", "if_else", "multiply", "signed_power", "subtract",
         "ts_corr", "ts_covariance", "ts_regression", "vector_neut",
     ]
     UNARY_POOL = [
@@ -47,8 +44,10 @@ class ExpressionBuilder:
 
     # The VARIADIC operators take any number of operands in one call, so one
     # `max(a, b, c)` replaces a chain of two binary joins. The platform asks
-    # for at least two inputs.
-    VARIADIC_POOL = ["max", "min"]
+    # for at least two inputs. `add` and `multiply` also accept two or more
+    # inputs (their descriptions in cache/operators.csv say so). `subtract` and
+    # `divide` are not VARIADIC: they stay binary joins.
+    VARIADIC_POOL = ["add", "max", "min", "multiply"]
 
     # The largest operand count one VARIADIC call is given. The platform leaves
     # the count open-ended, so the cap is a budget choice, not a platform limit.
@@ -56,16 +55,11 @@ class ExpressionBuilder:
 
     # The chance a join round uses a VARIADIC call instead of a binary one,
     # when at least three nodes are waiting to be joined.
-    VARIADIC_PROBABILITY = 0.35
-
-    # The number of wrappers applied on top of the joined tree, drawn from
-    # 0..POST_WRAPPERS. A wrapper here transforms the combined signal, which
-    # is a position no leaf-level wrapper can reach.
-    POST_WRAPPERS = 2
+    VARIADIC_PROBABILITY = 0.3
 
     # Swapping the operands changes the value, so a join may swap them.
     NON_COMMUTATIVE = {
-        "if_else", "signed_power", "subtract", "ts_corr", "ts_covariance",
+        "divide", "if_else", "signed_power", "subtract", "ts_corr", "ts_covariance",
         "ts_regression", "vector_neut",
     }
 
@@ -76,12 +70,15 @@ class ExpressionBuilder:
     # max and min compare magnitudes too, so they rank-wrap each operand the
     # same way a scale-sensitive binary join does.
     SCALE_SENSITIVE = {"add", "subtract", "multiply", "signed_power", "max", "min"}
-    JOIN_COST = 3
+
+    # The BRAIN platform rejects any FASTEXPR with more operators than this, so
+    # no `operator_limit` may exceed it. It is a platform fact, not a tunable.
+    PLATFORM_OPERATOR_LIMIT = 64
 
     # Operators that render their argument more than once (measured on the
-    # rendered text): sqrt 4x, trade_when 3x, if_else and most group_* 2x.
+    # rendered text): sqrt 4x, trade_when 3x, divide, if_else and most group_* 2x.
     REPEATING = {
-        "sqrt", "trade_when", "if_else",
+        "sqrt", "trade_when", "divide", "if_else",
         "group_backfill", "group_count", "group_neutralize", "group_scale",
         "group_std_dev", "group_sum", "group_zscore",
     }
@@ -90,10 +87,18 @@ class ExpressionBuilder:
     # GROUP field, so group_* is switched off there instead of reusing one id.
     MIN_POOL_SIZE = {"MATRIX": 1, "VECTOR": 3, "GROUP": 3}
 
-    def __init__(self, catalog, scope, theme):
+    def __init__(self, catalog, scope, theme, operator_limit, join_cost, post_wrappers):
+        if operator_limit > self.PLATFORM_OPERATOR_LIMIT:
+            raise ValueError(
+                f"OPERATOR_LIMIT = {operator_limit} is over the platform limit "
+                f"of {self.PLATFORM_OPERATOR_LIMIT} operators per expression."
+            )
         self.catalog = catalog
         self.scope = scope
         self.theme = theme
+        self.operator_limit = operator_limit
+        self.join_cost = join_cost
+        self.post_wrappers = post_wrappers
         self.pools = {
             field_type: self._pool_size(field_type)
             for field_type in ("MATRIX", "VECTOR", "GROUP")
@@ -143,10 +148,7 @@ class ExpressionBuilder:
 
     def _pool_size(self, field_type):
         snapshot = self.catalog.cache.open(self.scope, field_type)
-        if self.theme:
-            size = int(np.isin(snapshot.column("categoryid"), self.theme).sum())
-        else:
-            size = snapshot.n_rows
+        size = self.catalog.drawable_positions(snapshot, self.theme).size
         snapshot.close()
         return size
 
@@ -196,7 +198,7 @@ class ExpressionBuilder:
         return field_types, field_ids, drawn
 
     def build(self, field_ids, field_types, max_wrappers=2, field_meta=None):
-        """Build one FASTEXPR from `field_ids` that fits OPERATOR_LIMIT.
+        """Build one FASTEXPR from `field_ids` that fits `operator_limit`.
 
         Layers: a VECTOR field is reduced by one vec_* operator; each leaf gets
         0..max_wrappers MATRIX_UNARY/GROUP wrappers; the leaves are then
@@ -204,12 +206,14 @@ class ExpressionBuilder:
         call over three or more operands — until one expression is left. N=1 is
         the leaf stage alone. Every draw takes fresh OS entropy.
 
-        On top of the joined tree, 0..POST_WRAPPERS more wrappers are applied.
+        On top of the joined tree, 0..post_wrappers more wrappers are applied.
         Those transform the combined signal, which the leaf stage cannot
         reach: it only ever wraps a single field.
 
         The expression is rebuilt with a halving per-leaf wrapper allowance, then
         with poorer pools (see `levels`), until its rendered operator count fits.
+        Every field in `field_ids` is used: when `operator_limit` is below the
+        floor of the poorest level, `build` raises instead of dropping fields.
 
         Returns a tuple of (expression, profile). `profile` describes the whole
         expression: the data fields it reads, the operators at each level, and
@@ -217,28 +221,38 @@ class ExpressionBuilder:
         the drawn fields (see `draw_fields`); when it is None the profile lists
         the field ids without their metadata.
         """
-        n = len(field_ids)
-        if n == 0:
+        if len(field_ids) == 0:
             raise ValueError(
                 "build needs at least one field id: the scope has no MATRIX "
                 "and no VECTOR field above the pool minimum."
             )
-        # n leaves need n-1 joins even when each is a plain `add` of two rank()s.
-        if self.JOIN_COST * (n - 1) > self.OPERATOR_LIMIT:
+        n = len(field_ids)
+        # The poorest level joins with plain `add` of two rank()s (join_cost
+        # each, n-1 joins) and wraps nothing, so each VECTOR leaf adds exactly
+        # one vec_*. The floor assumes every leaf is VECTOR (n vec_*), so it
+        # depends on n alone: the VECTOR share of a draw is random, and a floor
+        # that counts it would raise on some draws and not on others at one limit.
+        floor = self.join_cost * (n - 1) + n
+        if floor > self.PLATFORM_OPERATOR_LIMIT:
+            max_fields = (self.PLATFORM_OPERATOR_LIMIT + self.join_cost) // (self.join_cost + 1)
             raise ValueError(
-                f"{n} fields need at least {self.JOIN_COST * (n - 1)} operators, over the "
-                f"platform's limit of {self.OPERATOR_LIMIT}."
+                f"{n} fields need up to {floor} operators, over the platform "
+                f"limit of {self.PLATFORM_OPERATOR_LIMIT}: draw at most "
+                f"{max_fields} fields."
+            )
+        if floor > self.operator_limit:
+            raise ValueError(
+                f"{n} fields need up to {floor} operators, over "
+                f"OPERATOR_LIMIT = {self.operator_limit}: raise "
+                f"OPERATOR_LIMIT to {floor} or more (at most "
+                f"{self.PLATFORM_OPERATOR_LIMIT}), or draw fewer fields."
             )
 
-        # The smallest tree the pools allow, kept as the fallback when no level
-        # fits the limit.
-        smallest = None
         for pools in self.levels:
-            allowance = max(1, (self.OPERATOR_LIMIT - self.JOIN_COST * (n - 1)) // n)
+            allowance = max(1, (self.operator_limit - self.join_cost * (n - 1)) // n)
             while True:
                 tree = self._tree(field_ids, field_types, max_wrappers, allowance, pools)
-                expression = tree["expression"]
-                if self.operator_count(expression) <= self.OPERATOR_LIMIT:
+                if self.operator_count(tree["expression"]) <= self.operator_limit:
                     # The post-join wrappers transform the combined signal, a
                     # position the leaf stage cannot reach. They are charged
                     # against whatever the tree left over, so they never push
@@ -247,13 +261,13 @@ class ExpressionBuilder:
                     return expression, self._profile(
                         expression, post, field_ids, field_types, field_meta
                     )
-                if smallest is None or self.operator_count(expression) < self.operator_count(smallest["expression"]):
-                    smallest = tree
                 if allowance == 1:
                     break
                 allowance //= 2
-        return smallest["expression"], self._profile(
-            smallest["expression"], smallest, field_ids, field_types, field_meta
+
+        raise ValueError(
+            f"No level fits {n} fields in OPERATOR_LIMIT = {self.operator_limit}: "
+            f"join_cost = {self.join_cost} is below the real cost of a join."
         )
 
     def _profile(self, expression, tree, field_ids, field_types, field_meta):
@@ -424,7 +438,7 @@ class ExpressionBuilder:
         return nodes[0]
 
     def _post_wrap(self, node, unary_pool, group_pool):
-        """Apply 0..POST_WRAPPERS wrappers on top of the joined tree.
+        """Apply 0..post_wrappers wrappers on top of the joined tree.
 
         A wrapper here transforms the combined signal. The leaf stage cannot
         produce that position: it only ever wraps a single field, so the
@@ -432,7 +446,7 @@ class ExpressionBuilder:
         """
         expression = node["expression"]
         operators = []
-        for _ in range(IntegerSampler.sample((0, self.POST_WRAPPERS))):
+        for _ in range(IntegerSampler.sample((0, self.post_wrappers))):
             if self.group_id is not None and group_pool and IntegerSampler.sample((0, 1)) == 0:
                 wrapped, operator = Group.get(self._pick(group_pool), expression, self.group_id)
             elif unary_pool:
@@ -441,7 +455,7 @@ class ExpressionBuilder:
                 break
             # A repeating wrapper renders its argument several times, so it can
             # push the whole expression past the operator limit.
-            if self.operator_count(wrapped) > self.OPERATOR_LIMIT:
+            if self.operator_count(wrapped) > self.operator_limit:
                 break
             expression = wrapped
             operators.append(operator)
@@ -589,9 +603,30 @@ def main():
     # fail the comparison.
     MIN_COVERAGE = 0.7
 
+    # Draws only pick fields whose dataset_valueScore is strictly below this.
+    # Applied when drawing, not when fetching, so the cache on disk is unchanged.
+    # None disables the cut.
+    MAX_VALUE_SCORE = 3
+
+    # Operator calls allowed in one FASTEXPR. Counted on the rendered text:
+    # nested calls count, and an operator that repeats its argument multiplies
+    # the cost of everything below it (sqrt^3(f) = 5 + 4*25 = 105).
+    OPERATOR_LIMIT = 14
+
+    # Operators one join costs when it joins two bare fields with a
+    # scale-sensitive binary operator: 1 binary + 2 rank() (see
+    # ExpressionBuilder.SCALE_SENSITIVE). Measured, not tuned: lowering it makes
+    # `build` underestimate the cost and overshoot OPERATOR_LIMIT.
+    JOIN_COST = 2
+
+    # The number of wrappers applied on top of the joined tree, drawn from
+    # 0..POST_WRAPPERS. A wrapper here transforms the combined signal, which
+    # is a position no leaf-level wrapper can reach.
+    POST_WRAPPERS = 1
+
     # categoryid values the field draws are restricted to (see
     # Docs/categoryid.md). Empty keeps the draw uniform over the whole catalog.
-    THEME = ['fundamental', 'model']
+    THEME = []
 
     # Region codes the scope is drawn from (see config/scopes.yaml). Empty draws
     # the region uniformly over every region. Delay and universe are not
@@ -603,7 +638,9 @@ def main():
     LOGIN_ALLOW = False
     print(f"LOGIN_ALLOW = {LOGIN_ALLOW}")
 
-    builder = CatalogBuilder(MIN_COVERAGE, refetch_stale=LOGIN_ALLOW)
+    builder = CatalogBuilder(
+        MIN_COVERAGE, refetch_stale=LOGIN_ALLOW, max_value_score=MAX_VALUE_SCORE
+    )
 
     # One session serves every scope: logging in per scope would burn the
     # platform's login budget (5 per minute, 25 per day) for no reason.
@@ -693,7 +730,9 @@ def main():
     in_region = [s for s in builder.scopes if s["region"] == region]
     scope = in_region[IntegerSampler.sample((0, len(in_region) - 1))]
 
-    expressions = ExpressionBuilder(builder, scope, THEME)
+    expressions = ExpressionBuilder(
+        builder, scope, THEME, OPERATOR_LIMIT, JOIN_COST, POST_WRAPPERS
+    )
     print(f"\nPool in {builder.cache.key(scope)} (theme={THEME}): {expressions.pools}")
     if expressions.empty:
         print(
@@ -703,7 +742,7 @@ def main():
 
     # n leaves need n-1 joins, which eats the operator budget: at n=60 only
     # 5 operators remain and the expression degenerates into a bare `add` chain.
-    FIELD_COUNTS = (1,)
+    FIELD_COUNTS = (5,)
     for n in FIELD_COUNTS:
         field_types, field_ids, drawn = expressions.draw_fields(n)
         if not field_ids:
@@ -720,10 +759,10 @@ def main():
         # print(" profile:")
         # print(json.dumps(profile, indent=2, default=str))
 
-        # replicated = ExpressionBuilder.replicate(profile)
+        replicated = ExpressionBuilder.replicate(profile)
         # print("  replicated from profile:")
         # print(f"  {replicated}")
-        # print(f"  identical to the original: {replicated == expression}")
+        print(f"  identical to the original: {replicated == expression}")
 
 
 if __name__ == "__main__":

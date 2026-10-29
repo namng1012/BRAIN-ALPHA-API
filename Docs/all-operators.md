@@ -412,7 +412,7 @@ OperatorProfile = TypedDict(
 | `group_*` mode 4, 5 | `densify`, `group_cartesian_product`, `bucket`, `rank` |
 | `group_backfill` | `ts_rank` (ngoài các operator theo mode) |
 | `group_mean` weight mode 5 | `ts_step` (ngoài các operator theo mode) |
-| `if_else` | `ts_rank` (mỗi operand chưa được rank) |
+| `if_else` | `ts_rank` (mỗi operand chưa được rank); thêm `ts_sum` khi `mode=1` |
 | `trade_when` | `ts_rank`, `ts_zscore`, `abs` |
 | `tail` | `ts_rank` |
 | `winsorize` | `ts_rank` |
@@ -459,7 +459,7 @@ def ts_corr(x: str, y: str, d: int | None = None, *, distribution="balanced"):
 | `MATRIX_BINARY` | `add`, `divide`, `multiply`, `power`, `signed_power`, `subtract`, `vector_neut` | Không có (expression deterministic) |
 | | `ts_corr`, `ts_covariance` | `d` (window) |
 | | `ts_regression` | `d` (window), `lag`, `rettype` |
-| | `if_else` (bucket `SELECT`) | `s1`, `s2` (float), `dx`, `dy` (window, chỉ khi operand được bọc `ts_rank`) |
+| | `if_else` (bucket `SELECT`) | `s1`, `s2` (float), `dx`, `dy` (window, chỉ khi operand được bọc `ts_rank`), `mode` (0/1), `dz` (window `ts_sum`, chỉ khi `mode=1`) |
 | `MATRIX_UNARY` | `abs_`, `inverse`, `log`, `pasteurize`, `reverse`, `sign`, `sqrt`, `zscore`, `days_from_last_change` | Không có |
 | | 23 ts_* operators | `d` (window), một số có `mode`, `driver`, `dense`, `k` |
 | | `hump` | `hump` (float) |
@@ -502,10 +502,18 @@ Các tham số ngẫu nhiên (`d`, `lag`, `rettype`, `std`, `hump`, v.v.) đư�
 | `lag` | `LAG_STREAM = 3` | `(0, 5)` | `"uniform"` | `ts_regression` |
 | `s1`, `s2` | 1, 2 | `(1.0, 2.0)` | theo `distribution` | `if_else` |
 | `dx`, `dy` | 3, 4 | `(60, 252)` | theo `distribution` | `if_else` (xem dưới) |
+| `mode` | 5 | `(0, 1)` | `"uniform"` | `if_else` |
+| `dz` | 6 | `(10, 52)` | theo `distribution` | `if_else`, chỉ khi `mode=1` |
 
-`if_else` dùng stream số thẳng trong hàm (1 đến 4), không dùng hằng `*_STREAM` của class, nên số 3 của `dx` trùng số của `LAG_STREAM`. Không xung đột vì `if_else` luôn gọi với `seed=None`; nếu sau này truyền seed cố định thì phải đổi thành hằng riêng.
+`if_else` dùng stream số thẳng trong hàm (1 đến 6), không dùng hằng `*_STREAM` của class, nên số 3 của `dx` trùng số của `LAG_STREAM`. Không xung đột vì `if_else` luôn gọi với `seed=None`; nếu sau này truyền seed cố định thì phải đổi thành hằng riêng.
 
 **`if_else` bọc `ts_rank` quanh operand.** Operand `x` (hoặc `y`) chưa bắt đầu bằng `ts_rank(`, `rank(`, `scale(`, `ts_scale(` thì được bọc `ts_rank(·, dx)` (hoặc `dy`), với `dx`, `dy` rút **độc lập** từ `[60, 252]`. Operand đã là rank operator thì giữ nguyên và **không** có `dx`/`dy` trong `config`. Trước đây window này là hằng 252, nên alpha `if_else` cũ không sinh lại giống hệt.
+
+**`if_else` có hai `mode`.** `mode` rút đều từ `{0, 1}` và luôn nằm trong `config`.
+- `mode=0`: `if_else(s1 * _x > s2 * _y, _x, _y)`, như trước.
+- `mode=1`: `ts_sum(if_else(s1 * _x > s2 * _y, 1, 0), dz)`, với `dz` rút từ `[10, 52]`. Chỉ trả 0/1 thì tín hiệu nghèo, nên chỉ báo được cộng dồn qua `dz` ngày. `ts_sum` được ghi vào `implicit` của profile.
+
+Hệ quả với alpha cũ: `if_else` mới có thêm khoá `mode` trong `config`, nên profile cũ (không có `mode`) khi `replicate` sẽ rút lại `mode` ngẫu nhiên thay vì phát lại `mode=0`.
 
 **Distribution modes:**
 

@@ -716,3 +716,189 @@ Mọi operator trong text (kể cả rank của scale-fix) vào profile: bỏ v�
 **Impact on reported results:** mỗi lần chạy main thấy một scope ngẫu nhiên thay vì USA_1_TOP3000, nên số liệu giữa các lần chạy không so sánh trực tiếp. Với THEME = ['fundamental', 'model'], GROUP còn 0 hoặc 1 field ở hầu hết scope, group_* tắt, và pool delay 0 nhỏ hơn rõ (USA_0 MATRIX 1634 so với USA_1 17096).
 
 **Sentiment:** 8 — quyết định ai được thấy field nào, reviewer sẽ hỏi vì sao delay 0 và 1 có trọng số bằng nhau.
+
+## 2026-10-29T15:32:31Z | methodology | score: 6 | tag: ace-lib-docs
+
+**Tags:** ace-lib-docs
+
+**Decision:** Ghi lại 15 bất đối xứng của reference code thay vì sửa chúng, và đánh dấu rõ đây là code tham khảo không phải code dự án.
+
+**Alternatives considered:**
+- Copy `ace_lib.py` vào dự án: bị cấm theo rule 16 và làm mất ranh giới giữa code tham khảo và code của dự án.
+- Chỉ ghi endpoint và không ghi quy ước: thiếu phần khó nhất, tức là cách biết một simulation đã xong.
+- Sửa các bất đối xứng ngay trong reference: bị cấm theo rule 16.
+
+**Rationale:** hai điểm lệch có ảnh hưởng đến kết luận khoa học nếu ai đó dùng lại logic kiểm tra: `check_prod_corr_test` dùng `<= threshold` còn `check_self_corr_test` dùng `<`; và khi thiếu dữ liệu thì prod corr trả "NONE" còn self corr trả "PASS". Code dự án mới phải viết lại với một quy ước thống nhất và ghi rõ quy ước đó.
+
+**Impact on reported results:** không ảnh hưởng số liệu hiện có; dự án chưa dùng các hàm kiểm tra correlation này.
+
+**Sentiment:** 6 — ranh giới giữa "ghi nhận" và "vá" là điều reviewer sẽ kiểm.
+
+## 2026-10-29T15:47:40Z | methodology | score: 6
+
+**Decision:** `if_else` mode 1 trả chỉ báo 0/1 cộng dồn qua `ts_sum(·, dz)`, `dz` rút từ [10, 52] theo `distribution`; `mode` rút đều từ {0, 1}.
+
+**Alternatives considered:**
+- `if_else(cond, 1, 0)` trần: user nhận xét đơn điệu.
+- `dz` cố định: user yêu cầu random trong 10..52.
+
+**Rationale:** chỉ báo nhị phân thô gần như không mang thông tin xếp hạng; cộng dồn theo cửa sổ (khoảng 2 tuần đến 1 năm giao dịch ở 52 ngày là 1/5 năm) cho tín hiệu liên tục hơn. Khoảng 10..52 do user chọn, chưa có trích dẫn.
+
+**Impact on reported results:** phân phối alpha `if_else` đổi: một nửa số lần gọi cho ra dạng `ts_sum(...)`. Alpha `if_else` sinh trước đây không còn tái lập từ profile cũ (thiếu `mode`).
+
+**Sentiment:** 6 — thay đổi phân phối expression, reviewer sẽ hỏi vì sao 10..52.
+
+## 2026-10-29T15:56:38Z | methodology | score: 7
+
+**Decision:** Chỉ bốc field có `dataset_valueScore < 4`, áp dụng lúc bốc, không lúc fetch.
+
+**Alternatives considered:**
+- Lọc lúc fetch như `MIN_COVERAGE`: phải fetch lại toàn bộ cache, và không đổi ngưỡng được bằng một dòng.
+- `<= 4`: user viết `< 4`.
+
+**Rationale:** theo yêu cầu user; ngưỡng đặt ở `main.py` như `MIN_COVERAGE`. `valueScore` là thuộc tính của dataset, nên cắt loại cả dataset. Chưa có trích dẫn vì sao 4; `how_to_use.py` dùng `0 < valueScore < 10` làm ví dụ.
+
+**Impact on reported results:** tập field nguồn nhỏ đi (MATRIX còn 71.5 %, VECTOR 61.2 %, GROUP 68.8 % trên 123 archive), nên phân phối alpha đổi. Alpha sinh trước đây có thể dùng field score >= 4.
+
+**Sentiment:** 7 — đổi tập field gốc, reviewer sẽ hỏi vì sao 4.
+
+## 2026-10-29T16:01:03Z | methodology | score: 7
+
+**Decision:** khi n field không thể vừa 64 operator, bỏ field cuối thay vì raise hoặc trả expression vượt giới hạn.
+
+**Alternatives considered:**
+- Raise `ValueError` như cũ: user yêu cầu không báo lỗi.
+- Trả cây nhỏ nhất vượt giới hạn: platform từ chối.
+- Bỏ field ngẫu nhiên: field đã được bốc ngẫu nhiên và độc lập nên bỏ cuối không thiên lệch phân phối field.
+
+**Rationale:** yêu cầu của user: hàm phải luôn sinh expression hợp lệ.
+
+**Impact on reported results:** với n >= 22, expression chứa ít field hơn n; n_data_fields trong profile là số thật. Đo: n = 23..100 cho 21 đến 22 field.
+
+**Sentiment:** 7 — số field trong alpha khác số field yêu cầu.
+
+## 2026-10-29T16:18:48Z | methodology | score: 8
+
+**Decision:** profile là genotype tất định của expression: `tree` đầy đủ (kể cả rank scale-fix, gắn origin), các view đếm là hàm của tree, `rendered` nhân multiplicity đo từ text.
+
+**Alternatives considered:**
+- Profile là cây build nguyên trạng: thiếu gene (rank), thừa gene (data.group).
+- Profile là bảng đếm theo text: text là phenotype, mất thông tin operator nào do generator chọn.
+
+**Rationale:** lọc nên làm lúc phân tích, không lúc ghi; hệ số lặp của operator đo từ text thay vì hard-code.
+
+**Impact on reported results:** counts của profile đổi nghĩa (unique so với rendered); heuristic stage phải chọn view.
+
+**Sentiment:** 8 — đổi schema profile, ảnh hưởng mọi phân tích phía sau.
+
+## 2026-10-29T16:28:37Z | methodology | score: 8
+
+**Decision:** `build` raise khi operator_limit < 3(n-1) + V, không bỏ field.
+
+**Alternatives considered:**
+- Bỏ lá cuối cho tới khi vừa (lượt trước): expression chứa ít field hơn draw, lệch profile/draw.
+- Sàn = POST_WRAPPERS * n (đề xuất ban đầu của user): đo cho thấy thấp hơn sàn thật.
+
+**Rationale:** sàn đo trực tiếp trên level nghèo nhất; mọi field draw đều có trong expression, nên draw và expression nhất quán.
+
+**Impact on reported results:** n lớn cần OPERATOR_LIMIT lớn hơn; không còn trường hợp n_data_fields < n.
+
+**Sentiment:** 8 — bảo toàn tương ứng draw và expression.
+
+## 2026-10-29T16:39:40Z | methodology | score: 7
+
+**Decision:** floor của build = JOIN_COST * (n - 1) + n (trường hợp xấu nhất toàn VECTOR), không dùng số VECTOR thật của draw.
+
+**Alternatives considered:**
+- 3(n-1) + V (chính xác): V ngẫu nhiên nên raise không nhất quán với cùng một limit.
+- POST_WRAPPERS * n: thấp hơn sàn thật.
+
+**Rationale:** ngưỡng chỉ phụ thuộc n nên user đặt OPERATOR_LIMIT một lần là chạy được mọi draw.
+
+**Impact on reported results:** ngưỡng cao hơn mức cần khi draw ít VECTOR; không đổi expression được sinh.
+
+**Sentiment:** 7 — đánh đổi nhất quán lấy ngưỡng bảo thủ.
+
+## 2026-10-29T16:47:38Z | methodology | score: 7
+
+**Decision:** floor không chứa POST_WRAPPERS; post wrapper là best-effort trên phần ngân sách còn dư.
+
+**Alternatives considered:**
+- floor = POST_WRAPPERS * n: thấp hơn sàn thật (đo ở lượt trước).
+- floor worst case 4^P * floor + 5(4^P - 1)/3 (sqrt lặp 4x, +5): 297 với n = 5, P = 2, vượt trần platform 64 nên không dùng được.
+
+**Rationale:** _post_wrap bỏ wrapper làm vượt limit, nên build không bao giờ vượt limit dù P lớn (0/300 vi phạm ở mọi limit đã đo).
+
+**Impact on reported results:** số post wrapper thực tế <= POST_WRAPPERS và giảm khi limit sát floor (ở limit = floor, 57% build không có wrapper nào so với 33% kỳ vọng).
+
+**Sentiment:** 7 — ảnh hưởng phân phối cấu trúc expression khi limit chặt.
+
+## 2026-10-29T16:54:15Z | methodology | score: 6
+
+**Decision:** giữ floor = join_cost * (n - 1) + n, không thay join_cost bằng POST_WRAPPERS + 1.
+
+**Alternatives considered:**
+- (POST_WRAPPERS + 1) * (n - 1) + n: khớp chỉ khi POST_WRAPPERS = 2; thấp hơn sàn thật khi P < 2, cao hơn cần thiết khi P > 2.
+
+**Rationale:** join_cost là chi phí đo của một join (1 binary + 2 rank), không phụ thuộc số post wrapper; post wrapper chỉ áp một lần trên node gốc, không theo từng join.
+
+**Impact on reported results:** none (không đổi code).
+
+**Sentiment:** 6 — tránh ngưỡng sai khi đổi POST_WRAPPERS.
+
+## 2026-10-29T17:10:18Z | methodology | score: 7
+
+**Decision:** add, multiply, subtract được dùng như VARIADIC (n >= 3 operand) bên cạnh max, min; divide không.
+
+**Alternatives considered:**
+- Giữ chỉ max, min: không dùng khả năng n-ary của add, multiply, subtract mà mô tả platform ghi.
+- Thêm divide: loại, chỉ nhận hai operand, và lý do loại khỏi BINARY_POOL (mẫu số 0) chưa đổi.
+
+**Rationale:** mô tả platform: add "two or more inputs", multiply "two or more inputs", subtract "two or more inputs"; subtract tính trái sang phải. Một lời gọi n-ary tốn n + 1 operator sau khi rank-wrap, so với 3(n - 1) cho chuỗi join nhị phân.
+
+**Impact on reported results:** tăng tỷ lệ join nhiều operand; subtract n-ary là phép trừ liên tiếp nên thứ tự operand ảnh hưởng giá trị. Chưa xác nhận trên simulation thật.
+
+**Sentiment:** 7 — đổi phân phối join, chưa xác nhận bằng simulation.
+
+## 2026-10-29T17:17:43Z | methodology | score: 7
+
+**Decision:** divide trở lại BINARY_POOL, render divide(x, y + 0.0001).
+
+**Alternatives considered:**
+- divide(x, add(y, 0.0001)): đúng mô tả platform nhưng tốn thêm 1 operator mỗi lần dùng.
+- Để divide ngoài pool (quyết định 2026-10-26): tránh lỗi mẫu số 0 nhưng bỏ một phép toán hợp lệ.
+
+**Rationale:** epsilon 0.0001 lấy từ mô tả platform của divide trong cache/operators.csv; viết infix nên số operator không đổi. Epsilon chỉ chặn mẫu số đúng bằng 0; y gần -0.0001 vẫn cho giá trị rất lớn.
+
+**Impact on reported results:** thêm một operator vào không gian join; divide không scale-fix nên một operand cỡ lớn có thể lấn át tỷ số. Chưa xác nhận trên simulation.
+
+**Sentiment:** 7 — đổi không gian tìm kiếm, chưa kiểm.
+
+## 2026-10-29T17:20:36Z | methodology | score: 8
+
+**Decision:** divide render x / (x + y + 0.0001) thay vì x / (y + 0.0001).
+
+**Alternatives considered:**
+- divide(x, y + 0.0001): giữ nghĩa x / y, chỉ chống y = 0 đúng điểm.
+- divide(x, add(y, 0.0001)): cùng ý, tốn thêm 1 operator.
+
+**Rationale:** theo yêu cầu của user. Giá trị là tỷ trọng x trong x + y: giữ cùng dấu và cùng bậc với x, bị chặn trong [0, 1] khi x, y cùng dấu dương.
+
+**Impact on reported results:** divide không còn là phép chia x cho y; một reviewer hỏi tên operator sẽ thấy không khớp phép tính. Mẫu số vẫn về 0 khi x + y = -0.0001.
+
+**Sentiment:** 8 — tên operator không còn khớp phép tính, cần nói rõ trong paper.
+
+## 2026-10-29T17:34:13Z | methodology | score: 8
+
+**Decision:** Trạng thái cuối của pool join: VARIADIC_POOL = add, max, min, multiply (4 operator); subtract không phải VARIADIC; divide ở BINARY_POOL và render divide(x, y + x + 0.0001). Entry 2026-10-29T17:10:18Z (subtract là VARIADIC) và entry 2026-10-29T17:17:43Z (divide(x, y + 0.0001)) đã bị thay thế bởi entry này.
+
+**Alternatives considered:**
+- subtract n-ary (x - y - z): bị loại theo chỉ dẫn của user; subtract giữ làm join nhị phân.
+- divide(x, y + 0.0001): giữ nghĩa x / y; user chọn dạng có x trong mẫu số.
+- divide(x, add(y, 0.0001)): đúng mô tả platform nhưng tốn thêm 1 operator mỗi lần dùng.
+
+**Rationale:** theo chỉ dẫn của user. Giá trị của divide là x / (x + y + 0.0001), tức tỷ trọng của x trong x + y, không phải x / y. Epsilon 0.0001 lấy từ mô tả divide trong cache/operators.csv. x được render hai lần nên divide vào REPEATING, nghĩa là level "calm" loại divide khỏi pool binary.
+
+**Impact on reported results:** tên operator divide không còn khớp phép tính, cần nói rõ trong paper. Mẫu số vẫn về 0 khi x + y = -0.0001. divide chưa nằm trong SCALE_SENSITIVE nên không rank-wrap. Chưa xác nhận trên simulation rằng platform chấp nhận cú pháp infix này, hay đếm "+" infix là một operator.
+
+**Sentiment:** 8 — đổi ngữ nghĩa một operator và phân phối join, chưa kiểm trên platform.

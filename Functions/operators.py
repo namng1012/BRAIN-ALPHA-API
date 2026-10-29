@@ -61,6 +61,7 @@ IMPLICIT_CATEGORY={
     "bucket": "GROUPING",
     "group_cartesian_product": "GROUPING",
     "ts_rank": "MATRIX_UNARY",
+    "ts_sum": "MATRIX_UNARY",
     "ts_zscore": "MATRIX_UNARY",
     "abs": "MATRIX_UNARY",
     "rank": "MATRIX_UNARY",
@@ -382,12 +383,14 @@ class MatrixBinary:
         """Build the `divide` FASTEXPR over two matrix field ids.
 
         The platform's `divide` takes no `filter` argument, so NaN propagates and a
-        zero denominator raises — the caller guards it with an epsilon instead.
+        zero denominator raises. The denominator is `y + x + 0.0001`, written infix
+        so the rendered text has no extra call: the value is x / (x + y + 0.0001),
+        the share of x in x + y, not x / y. `x` is rendered twice.
         """
         return MatrixBinary._profile(
             "divide",
             {},
-            f"divide({x}, {y})",
+            f"divide({x}, {y} + {x} + 0.0001)",
         )
 
     @staticmethod
@@ -574,6 +577,8 @@ class MatrixBinary:
         s2: float | None=None,
         dx: int | None=None,
         dy: int | None=None,
+        mode: int | None=None,
+        dz: int | None=None,
         *,
         distribution: Literal["uniform", "balanced"]="balanced"
     ) -> tuple[str, OperatorProfile]:
@@ -588,10 +593,14 @@ class MatrixBinary:
             s1, s2: weighting coefficients. If None, samples from [1.0, 2.0] with given distribution.
             dx, dy: ts_rank windows wrapping x and y. If None, sampled independently from
                 [60, 252] with given distribution; unused when the operand is already ranked.
-            distribution: sampling strategy for s1, s2, dx, dy when None.
+            mode: 0 or 1. If None, drawn uniformly from {0, 1}.
+            dz: ts_sum window in mode 1. If None, sampled from [10, 52] with given
+                distribution; unused in mode 0.
+            distribution: sampling strategy for s1, s2, dx, dy, dz when None.
 
         Condition: s1 * _x > s2 * _y
-        Returns _x if condition is truthy, else _y.
+        mode 0: returns _x if condition is truthy, else _y.
+        mode 1: returns ts_sum(1 if condition is truthy else 0, dz).
         """
         if s1 is None:
             s1=FloatSampler.sample((1.0, 2.0), None, 1, distribution=distribution)
@@ -618,8 +627,20 @@ class MatrixBinary:
             config["dy"]=dy
             implicit.append("ts_rank")
 
+        if mode is None:
+            mode=IntegerSampler.sample((0, 1), None, 5, distribution="uniform")
+        config["mode"]=mode
+
         condition=f"{s1} * {_x} > {s2} * {_y}"
-        expression=f"if_else({condition}, {_x}, {_y})"
+        if mode==0:
+            expression=f"if_else({condition}, {_x}, {_y})"
+        else:
+            # A bare 0/1 indicator is a poor signal, so it is accumulated over dz days.
+            if dz is None:
+                dz=IntegerSampler.sample((10, 52), None, 6, distribution="uniform")
+            config["dz"]=dz
+            expression=f"ts_sum(if_else({condition}, 1, 0), {dz})"
+            implicit.append("ts_sum")
 
         return MatrixBinary._profile(
             "if_else",
@@ -632,9 +653,10 @@ class MatrixBinary:
 class Variadic:
     """The VARIADIC operators: any number of matrix fields in, one matrix out.
 
-    Only `max` and `min` live here. They take at least two inputs and are
-    commutative, so the order the operands are given in does not change the
-    result.
+    `max`, `min`, `add` and `multiply` live here. The platform's description of
+    each says it takes two or more inputs. They are commutative, so the order
+    the operands are given in does not change the result. The two-operand
+    forms of `add` and `multiply` stay in `MatrixBinary`.
     """
 
     @staticmethod
@@ -651,8 +673,10 @@ class Variadic:
         FASTEXPR string and profile contains category, name, and config.
         """
         builders={
+            "add": Variadic.add_,
             "max": Variadic.max_,
             "min": Variadic.min_,
+            "multiply": Variadic.multiply_,
         }
         if name not in builders:
             raise ValueError(f"Unknown VARIADIC operator: {name}")
@@ -694,6 +718,26 @@ class Variadic:
             "implicit": implicit or [],
         }
         return (expression, profile)
+
+    @staticmethod
+    def add_(operands: list[str]) -> tuple[str, OperatorProfile]:
+        """Build the `add` FASTEXPR over two or more matrix fields.
+
+        `filter=true` treats NaN as 0 before summing, as in `MatrixBinary.add`.
+        """
+        return Variadic._profile(
+            "add", {}, f"add({', '.join(operands)}, filter=true)"
+        )
+
+    @staticmethod
+    def multiply_(operands: list[str]) -> tuple[str, OperatorProfile]:
+        """Build the `multiply` FASTEXPR over two or more matrix fields.
+
+        `filter=true` treats NaN as 1 before multiplying, as in `MatrixBinary.multiply`.
+        """
+        return Variadic._profile(
+            "multiply", {}, f"multiply({', '.join(operands)}, filter=true)"
+        )
 
     @staticmethod
     def max_(operands: list[str]) -> tuple[str, OperatorProfile]:
@@ -909,7 +953,7 @@ class MatrixUnary:
     ) -> tuple[str, OperatorProfile]:
         """Build the `hump` FASTEXPR over one matrix field id."""
         if hump is None:
-            hump=FloatSampler.sample(seed=None, stream=MatrixUnary.HUMP_STREAM, distribution=distribution)
+            hump=FloatSampler.sample((0.0, 1.0), None, stream=MatrixUnary.HUMP_STREAM, distribution=distribution)
         return MatrixUnary._profile(
             "hump", {"hump": hump}, f"hump({x}, hump={hump:.4f})"
         )

@@ -6,7 +6,7 @@ Quy tắc xuyên suốt: **không đổi quy tắc của bất kỳ primitive op
 
 ## 1. Vai trò và API
 
-`ExpressionBuilder(catalog, scope, theme)` gồm ba việc:
+`ExpressionBuilder(catalog, scope, theme, operator_limit, join_cost, post_wrappers)` gồm ba việc:
 
 | Method | Việc |
 | --- | --- |
@@ -17,7 +17,9 @@ Quy tắc xuyên suốt: **không đổi quy tắc của bất kỳ primitive op
 Luồng trong `main()`:
 
 ```python
-expressions = ExpressionBuilder(builder, scope, THEME)
+expressions = ExpressionBuilder(
+    builder, scope, THEME, OPERATOR_LIMIT, JOIN_COST, POST_WRAPPERS
+)
 field_types, field_ids, drawn = expressions.draw_fields(n)
 expression, profile = expressions.build(field_ids, field_types, field_meta=drawn)
 replicated = ExpressionBuilder.replicate(profile)   # == expression
@@ -75,11 +77,11 @@ Nhiều join phụ thuộc độ lớn của operand: một field cỡ 1e9 sẽ 
 
 ### 3.4 Variadic join (`_variadic_join`)
 
-`max(a, b, c)` thay một chuỗi hai join nhị phân và chỉ tốn 1 operator cho lời gọi. Builder là `Variadic.get(name, operands)` trong `Functions/operators.py`. `VARIADIC_MAX_OPERANDS = 4` là lựa chọn ngân sách, không phải giới hạn platform (platform chỉ đòi ít nhất 2 operand).
+`max(a, b, c)` thay một chuỗi hai join nhị phân và chỉ tốn 1 operator cho lời gọi. Builder là `Variadic.get(name, operands)` trong `Functions/operators.py`. `VARIADIC_POOL` có 4 operator: `max`, `min`, và `add`, `multiply` (mô tả của platform trong `cache/operators.csv` ghi cả hai nhận "two or more inputs"). `subtract` và `divide` không vào: chúng là join nhị phân. Cả bốn operator variadic đều giao hoán. Dạng hai operand của `add`, `multiply` vẫn ở `MatrixBinary`. Chưa xác nhận trên simulation thật rằng platform chấp nhận lời gọi từ ba operand trở lên của `add` và `multiply`; căn cứ hiện tại chỉ là mô tả của platform. `VARIADIC_MAX_OPERANDS = 4` là lựa chọn ngân sách, không phải giới hạn platform (platform chỉ đòi ít nhất 2 operand).
 
 ### 3.5 Post-join wrapper (`_post_wrap`)
 
-Sau khi cây join xong, áp thêm `0..POST_WRAPPERS` (2) wrapper lên node gốc. Wrapper thử từng cái: nếu kết quả làm `operator_count` vượt `OPERATOR_LIMIT` thì dừng (không áp cái đó). Vì vậy post-wrap chỉ dùng phần ngân sách mà cây còn dư.
+Sau khi cây join xong, áp thêm `0..POST_WRAPPERS` (2) wrapper lên node gốc. Wrapper thử từng cái: nếu kết quả làm `operator_count` vượt `operator_limit` thì dừng (không áp cái đó). Vì vậy post-wrap chỉ dùng phần ngân sách mà cây còn dư.
 
 Đo trên generator (3000 mẫu mỗi cấu hình), mean operator count:
 
@@ -94,7 +96,7 @@ Hai lever đối lập về ngân sách: post-wrap tiêu operator, variadic ti�
 
 ## 4. Ngân sách operator
 
-Platform giới hạn **64 operator** trong một FASTEXPR (`OPERATOR_LIMIT`). Bộ đếm `operator_count` đếm trên **text đã render** bằng regex `\b[A-Za-z_][A-Za-z0-9_]*\s*\(`, nên:
+Platform giới hạn **64 operator** trong một FASTEXPR (`OPERATOR_LIMIT` trong `main()`, truyền vào builder thành `self.operator_limit`). Bộ đếm `operator_count` đếm trên **text đã render** bằng regex `\b[A-Za-z_][A-Za-z0-9_]*\s*\(`, nên:
 
 - Lời gọi lồng nhau đều được đếm.
 - Operator **lặp argument** nhân chi phí của cả cây con bên dưới. `REPEATING` gồm `sqrt` (4 lần), `trade_when` (3), `if_else` (2) và đa số `group_*` (2). Ví dụ `sqrt` lồng 3 tầng quanh một field tốn 5 + 4*25 = 105.
@@ -102,19 +104,19 @@ Platform giới hạn **64 operator** trong một FASTEXPR (`OPERATOR_LIMIT`). B
 
 ### 4.1 Cấp phát và hạ cấp (`build`)
 
-n lá cần ít nhất `n - 1` join, mỗi join tốn tối đa `JOIN_COST = 3`. Nếu `3 * (n - 1) > 64` (tức n >= 23) thì `build` raise `ValueError`.
+n lá cần ít nhất `n - 1` join, mỗi join tốn tối đa `JOIN_COST = 3`, và mỗi lá VECTOR tốn thêm đúng 1 `vec_*`. Sàn chính xác của level nghèo nhất (chỉ `add`, không wrapper) là `3 * (n - 1) + V` với V là số lá VECTOR. Nhưng V được draw ngẫu nhiên (n = 5 cho V từ 0 đến 5, trung bình 2.5), nên dùng V làm ngưỡng khiến cùng một `OPERATOR_LIMIT` lúc raise lúc không (n = 5, limit 14: raise 23/40 lần). Vì vậy ngưỡng dùng trường hợp xấu nhất V = n: `floor = JOIN_COST * (n - 1) + n = 4n - 3`, chỉ phụ thuộc n. Nếu `floor > operator_limit` thì `build` **raise `ValueError`** nêu `floor` và yêu cầu tăng `OPERATOR_LIMIT` hoặc draw ít field hơn. Trần cứng là `PLATFORM_OPERATOR_LIMIT = 64` (platform từ chối expression nhiều hơn): `OPERATOR_LIMIT > 64` làm constructor raise, và `floor > 64` làm `build` raise nêu số field tối đa `(64 + JOIN_COST) // (JOIN_COST + 1) = 16`. Đã kiểm worst case toàn VECTOR ở limit `4n - 3` với n = 1, 2, 3, 5, 8, 16: luôn vừa; n = 17 cho floor 65 nên raise. Nếu không level nào vừa (chỉ xảy ra khi `join_cost` thấp hơn chi phí thật của một join), `build` raise thay vì trả `None`. Đổi lại ngưỡng có thể cao hơn mức cần thiết khi draw ít VECTOR. Build không bao giờ bỏ field: mọi field truyền vào đều có trong expression. Công thức `POST_WRAPPERS * n` không đủ làm sàn (n = 22 cho 44, trong khi sàn thật có lúc 78). `POST_WRAPPERS` không nằm trong floor: `_post_wrap` bỏ wrapper làm vượt limit, nên post wrapper là best-effort (0/300 vi phạm ở mọi limit đã đo), và thay `JOIN_COST` bằng `POST_WRAPPERS + 1` chỉ khớp khi `POST_WRAPPERS = 2`.
 
 Mỗi lá được cấp `allowance = max(1, (64 - 3*(n-1)) // n)` operator. `build` thử lần lượt các **level pool**, từ giàu đến nghèo (`self.levels`):
 
 | Level | Binary | Unary | Group | Variadic |
 | --- | --- | --- | --- | --- |
-| 0 | `BINARY_POOL` | `UNARY_POOL` | `GROUP_POOL` | `max`, `min` |
+| 0 | `BINARY_POOL` | `UNARY_POOL` | `GROUP_POOL` | `add`, `max`, `min`, `multiply` |
 | 1 | `BINARY_POOL` | `UNARY_POOL` | `GROUP_POOL` | không |
 | 2 | bỏ operator `REPEATING` | bỏ `REPEATING` | bỏ `REPEATING` | không |
 | 3 | chỉ `add` | `UNARY_POOL` | `GROUP_POOL` | không |
 | 4 | chỉ `add` | không | không | không |
 
-Với mỗi level: dựng cây; nếu `operator_count > 64` thì **chia đôi** `allowance` và dựng lại, đến khi `allowance == 1`; rồi sang level kế. Cây nhỏ nhất đã thấy được giữ làm fallback nếu không level nào vừa.
+Với mỗi level: dựng cây; nếu `operator_count > 64` thì **chia đôi** `allowance` và dựng lại, đến khi `allowance == 1`; rồi sang level kế. Khi `operator_limit >= floor`, level 4 luôn vừa nên `build` luôn trả expression trong giới hạn với đủ n field.
 
 Kết quả đo gần đây (scope `USA_1_TOP3000`, 60 mẫu mỗi n):
 
@@ -129,9 +131,7 @@ Kết quả đo gần đây (scope `USA_1_TOP3000`, 60 mẫu mỗi n):
 | 20 | 0 | 64 |
 | 22 | 2 (lần đo lại, 150 mẫu: 0) | 66 |
 
-**Điểm lệch cần biết:** ở n = 22, lần đo đầu có 2/60 mẫu vượt 64 (tối đa 66), nhưng lần đo lại với 150 mẫu có 0 mẫu vượt. Tức là hiếm (khoảng 1%) và chưa đo đủ để cho tỉ lệ chắc chắn. Điều kiện khả thi `3*(n-1) <= 64` cho phép n = 22, và khi không level nào vừa, `build` trả cây nhỏ nhất thay vì raise, nên một expression vượt 64 sẽ bị platform từ chối.
-
-**Nguyên nhân chưa được xác minh.** Giả thuyết: kiểm tra khả thi chỉ tính chi phí join (`JOIN_COST`), không tính `vec_*` của các lá VECTOR (khoảng nửa số lá), nên ở n sát giới hạn có thể thiếu vài operator. Giả thuyết này chưa được kiểm bằng phép đo. Hành vi này là **hiện có**, chưa sửa. Nếu cần mọi expression hợp lệ thì tránh n >= 22.
+**Đã sửa (2026-10-29).** Trước đây ở n = 22 có khoảng 1% mẫu vượt 64 (tối đa 66) vì khi không level nào vừa, `build` trả cây nhỏ nhất đã thấy thay vì raise, và platform sẽ từ chối expression đó. Nguyên nhân đã xác minh: kiểm tra khả thi cũ chỉ tính `JOIN_COST`, không tính `vec_*` của lá VECTOR. Nay `build` kiểm `floor = 3(n-1) + n = 4n - 3` ngay từ đầu và raise nếu `operator_limit < floor`. Đo lại với draw thật (n = 1, 2, 5, 10; 15 mẫu mỗi n): ở `operator_limit = floor` expression luôn vừa, đủ n field, `replicate` khớp từng ký tự; ở `floor - 1` luôn raise.
 
 ## 5. Profile
 
@@ -257,15 +257,15 @@ Thay đổi (3) làm `config` của `Group` đổi hình dạng (thêm `bucket_r
 
 | Hằng số | Giá trị | Ý nghĩa |
 | --- | --- | --- |
-| `OPERATOR_LIMIT` | 64 | giới hạn operator của platform |
-| `JOIN_COST` | 3 | 1 binary + 2 `rank` cho mỗi join |
+| `OPERATOR_LIMIT` | 64 | giới hạn operator của platform; đặt trong `main()` |
+| `JOIN_COST` | 3 | 1 binary + 2 `rank` cho mỗi join; đặt trong `main()` |
 | `VARIADIC_MAX_OPERANDS` | 4 | số operand tối đa của một `max`/`min` (chọn theo ngân sách) |
 | `VARIADIC_PROBABILITY` | 0.35 | xác suất dùng variadic khi còn >= 3 node |
-| `POST_WRAPPERS` | 2 | số wrapper tối đa trên cây đã join |
+| `POST_WRAPPERS` | 2 | số wrapper tối đa trên cây đã join; đặt trong `main()` |
 | `MIN_POOL_SIZE` | MATRIX 1, VECTOR 3, GROUP 3 | pool nhỏ hơn mức này coi như rỗng |
 | `max_wrappers` (tham số `build`) | 2 | số wrapper tối đa mỗi lá |
 
-Pool operator: `BINARY_POOL` (9), `UNARY_POOL` (40), `VECTOR_POOL` (7), `GROUP_POOL` (9), `VARIADIC_POOL` (2). `divide` và `power` bị loại khỏi `BINARY_POOL` có chủ ý: mẫu số bằng 0 hoặc cơ số âm với số mũ không nguyên làm simulation lỗi và tốn một slot.
+Pool operator: `BINARY_POOL` (9), `UNARY_POOL` (40), `VECTOR_POOL` (7), `GROUP_POOL` (9), `VARIADIC_POOL` (4). `power` bị loại khỏi `BINARY_POOL` có chủ ý: cơ số âm với số mũ không nguyên làm simulation lỗi và tốn một slot. `divide` nằm trong `BINARY_POOL` (10 operator), builder render `divide(x, y + x + 0.0001)`, tức giá trị `x / (x + y + 0.0001)`: tỷ trọng của x trong x + y, không phải x / y. Viết infix nên `OPERATOR_CALL` không đếm thêm call nào; chưa xác nhận platform có đếm `+` infix là một operator hay không. `x` được render hai lần nên `divide` nằm trong `REPEATING`. `divide` không giao hoán nên nằm trong `NON_COMMUTATIVE` và có thể bị đảo operand; chưa nằm trong `SCALE_SENSITIVE`, nên không được rank-wrap.
 
 Các hằng `VARIADIC_MAX_OPERANDS`, `VARIADIC_PROBABILITY`, `POST_WRAPPERS`, `max_wrappers` là **lựa chọn thiết kế chưa được tối ưu theo kết quả platform**. Không có bằng chứng hiện tại rằng giá trị nào tốt hơn.
 

@@ -817,3 +817,65 @@ Giờ caller có thể:
 **Reusable in:** mọi phần Docs có con số đo; kèm cỡ mẫu và đánh dấu giả thuyết chưa kiểm.
 
 **Sentiment:** 5 — kỷ luật ghi chép, không phải kỹ thuật mới.
+
+## 2026-10-29T15:32:31Z | code-technique | score: 7 | tag: ace-lib-docs
+
+**Tags:** ace-lib-docs
+
+**Where:** ACE_API__Gold_/ace_lib.py (toàn bộ), Docs/Brain-Instruction-Code.md
+
+**Pattern:** các quy ước API quan sát được từ reference code, gom thành một bảng
+
+**Why:** hợp đồng với platform không nằm ở tài liệu chính thức nào trong repo, mà nằm rải trong code: hết hạn token là `json["token"]["expiry"]`; một simulation "xong" khi header `Retry-After` **bằng 0** chứ không phải khi status code thành công; rate limit nằm ở header `x-ratelimit-remaining-second`/`-minute`; tên cột của mọi response tabular nằm ở `schema.properties[].name`. Ba quy ước đầu là những thứ dễ làm sai nhất nếu chỉ đoán từ HTTP thông thường.
+
+**Reusable in:** mọi code mới gọi BRAIN API của dự án.
+
+**Sentiment:** 7 — điều kiện tiên quyết để kết nối platform đúng, reviewer sẽ hỏi vì sao biết.
+
+## 2026-10-29T15:47:40Z | code-technique | score: 6
+
+**Where:** Functions/operators.py, `MatrixBinary.if_else`; `IMPLICIT_CATEGORY`
+
+**Pattern:** tham số chỉ tồn tại ở một nhánh (`dz` chỉ khi `mode=1`) được ghi vào `config` đúng nhánh đó, kèm stream riêng (5 cho `mode`, 6 cho `dz`).
+
+**Why:** `replicate` gọi lại builder bằng `**config`, nên mọi giá trị đã rút phải nằm trong `config`, và giá trị không dùng thì không được nằm trong đó. Stream mới không dịch giá trị của các stream cũ (1 đến 4).
+
+**Reusable in:** mọi operator có nhánh render khác nhau.
+
+**Sentiment:** 6 — giữ replay đúng, nhưng là mẫu có sẵn trong file.
+
+## 2026-10-29T15:56:38Z | code-technique | score: 6
+
+**Where:** Functions/data.py `CatalogBuilder.drawable_positions`; main.py `ExpressionBuilder._pool_size`
+
+**Pattern:** một hàm duy nhất quyết định "hàng nào được phép bốc" (theme AND value-score), cả bốc lẫn đếm pool cùng gọi.
+
+**Why:** trước đây `_pool_size` và `sample_field_ids` mỗi nơi tự viết lọc theme; thêm điều kiện thứ hai ở hai nơi dễ làm pool báo to hơn số bốc được, và `draw_fields` sẽ xin quá số có.
+
+**Reusable in:** mọi bộ lọc thêm vào sau trên cột đã lưu.
+
+**Sentiment:** 6 — ngăn lệch pool và draw, nhưng là refactor nhỏ.
+
+## 2026-10-29T16:01:03Z | code-technique | score: 6
+
+**Where:** main.py `ExpressionBuilder.build`
+
+**Pattern:** vòng ngoài giảm n đến khi vừa ngân sách, thay cho "giữ cây nhỏ nhất làm fallback".
+
+**Why:** fallback cũ có thể trả cây vượt 64 operator; platform từ chối và slot simulation bị mất. Một lá luôn vừa, nên vòng lặp luôn dừng.
+
+**Reusable in:** mọi bộ build có ngân sách cứng.
+
+**Sentiment:** 6 — bỏ biến `smallest`, đơn giản hơn và đúng hơn.
+
+## 2026-10-29T17:34:13Z | code-technique | score: 5
+
+**Where:** Functions/operators.py `MatrixBinary.divide`; main.py `REPEATING`, `OPERATOR_CALL`
+
+**Pattern:** viết epsilon guard bằng toán tử infix (`y + x + 0.0001`) thay vì gọi `add(...)`, để regex đếm operator (chỉ đếm `name(`) không thấy thêm call.
+
+**Why:** tránh tốn 1 operator trong ngân sách 64. Đổi lại `x` xuất hiện hai lần trong text, nên toán tử phải vào REPEATING để chi phí cây con được nhân đúng.
+
+**Reusable in:** mọi guard hoặc phép cộng hằng số muốn tránh một call. Rủi ro: nếu platform tính `+` là operator thì ngưỡng 64 bị vượt mà main.py không biết; chưa xác nhận.
+
+**Sentiment:** 5 — thủ thuật nhỏ, nhưng phụ thuộc cách platform đếm operator.

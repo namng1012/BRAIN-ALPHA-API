@@ -203,8 +203,10 @@ class CatalogBuilder:
         min_coverage: float,
         refetch_stale: bool = True,
         scopes_path: Path = SCOPES_PATH,
+        max_value_score: float | None = None,
     ):
         self.min_coverage = min_coverage
+        self.max_value_score = max_value_score
         self.refetch_stale = refetch_stale
         self.scopes = yaml.safe_load(scopes_path.read_text(encoding="utf-8"))["scopes"]
         self.cache = CatalogCache()
@@ -337,6 +339,23 @@ class CatalogBuilder:
             )
         return paths
 
+    def drawable_positions(self, cache: ScopeCache, theme: tuple[str, ...] | list[str] = ()) -> np.ndarray:
+        """Row positions of an archive a draw may pick.
+
+        `theme` keeps rows whose `categoryid` is in it (empty keeps all rows).
+        `max_value_score` keeps rows whose dataset `dataset_valueScore` is
+        strictly below it (None keeps all rows). The score filter is applied
+        here, on the stored column, rather than at fetch time, so it takes
+        effect on snapshots already on disk. A missing score is NaN and fails
+        the comparison.
+        """
+        mask = np.ones(cache.n_rows, dtype=bool)
+        if len(theme):
+            mask &= np.isin(cache.column("categoryid"), theme)
+        if self.max_value_score is not None:
+            mask &= cache.column("dataset_valueScore") < self.max_value_score
+        return np.flatnonzero(mask)
+
     def sample_field_ids(
         self,
         region: str,
@@ -355,9 +374,9 @@ class CatalogBuilder:
         order, so the caller can pop fields off the front and still know which
         metadata belongs to which field.
 
-        Every stored row is already eligible: `fetch_scope` applies the coverage
-        filter before writing, so any position is a valid draw and no threshold
-        is re-checked here. Positions are drawn with `replace=False`; asking for
+        Every stored row already clears the coverage filter (`fetch_scope`
+        applies it before writing); the `max_value_score` cut, if set, is
+        applied here by `drawable_positions`. Positions are drawn with `replace=False`; asking for
         more than the archive holds returns the whole archive instead of raising,
         because a smaller sample is still a valid answer.
 
@@ -378,10 +397,7 @@ class CatalogBuilder:
         cache = self.cache.open(scope, data_type)
         if seed is None:
             seed = int.from_bytes(os.urandom(8), "big")
-        if len(theme):
-            positions = np.flatnonzero(np.isin(cache.column("categoryid"), theme))
-        else:
-            positions = np.arange(cache.n_rows)
+        positions = self.drawable_positions(cache, theme)
         picked = positions[
             np.random.default_rng(seed).choice(
                 positions.size, size=min(n, positions.size), replace=False

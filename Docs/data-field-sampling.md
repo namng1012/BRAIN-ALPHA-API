@@ -320,6 +320,16 @@ Trước đây hàm trả `list[str]` (chỉ `fieldid`) và bỏ phần metadata
 
 Đọc metadata cho vài dòng gần như miễn phí so với trước: mỗi cột là một member riêng của `.npz`, nên `np.load` phải decompress **cả cột** bất kể lấy bao nhiêu dòng. Đọc cột `field_description` (text dài) cho 6 dòng tốn gần bằng đọc 19 cột cho 36 854 dòng.
 
+### 7.4 Cắt theo `dataset_valueScore`
+
+`CatalogBuilder(max_value_score=...)` giữ lại khi bốc những field có `dataset_valueScore < max_value_score` (so sánh chặt, `None` tắt cắt). `main.py` đặt `MAX_VALUE_SCORE = 4`.
+
+Cắt áp dụng lúc **bốc** (`drawable_positions`, dùng chung cho `sample_field_ids` và `_pool_size`), không phải lúc fetch, nên cache trên đĩa không đổi và có hiệu lực ngay trên snapshot cũ. Khác với `MIN_COVERAGE` (cắt lúc fetch, đã nằm trong archive).
+
+`dataset_valueScore` là score của **dataset**, không phải của field: mọi field cùng dataset có cùng score. Đo trên 123 archive đang có: không có NaN, score từ 1.0 đến 8.0 (MATRIX, VECTOR) và 1.0 đến 6.0 (GROUP). `< 4` giữ 329 085/460 153 dòng MATRIX (71.5 %), 85 594/139 925 VECTOR (61.2 %), 27 006/39 274 GROUP (68.8 %).
+
+Hệ quả: pool nhỏ đi, nên `MIN_POOL_SIZE` có thể loại thêm field type ở scope nhỏ; `pools` in ra ở đầu `main` đã phản ánh số sau cắt.
+
 ---
 
 
