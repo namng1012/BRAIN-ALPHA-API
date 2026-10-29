@@ -902,3 +902,68 @@ Mọi operator trong text (kể cả rank của scale-fix) vào profile: bỏ v�
 **Impact on reported results:** tên operator divide không còn khớp phép tính, cần nói rõ trong paper. Mẫu số vẫn về 0 khi x + y = -0.0001. divide chưa nằm trong SCALE_SENSITIVE nên không rank-wrap. Chưa xác nhận trên simulation rằng platform chấp nhận cú pháp infix này, hay đếm "+" infix là một operator.
 
 **Sentiment:** 8 — đổi ngữ nghĩa một operator và phân phối join, chưa kiểm trên platform.
+
+## 2026-10-29T17:47:54Z | methodology | score: 7 | tag: reform alpha with LLM
+
+**Tags:** reform alpha with LLM
+
+**Decision:** (đề xuất, chưa code) LLM chỉ sinh phần giải thích đi kèm alpha, không nằm trong đường tạo chuỗi nộp lên BRAIN. Đầu vào của LLM là tree của profile cộng mô tả operator và metadata field, không phải chuỗi đã render.
+
+**Alternatives considered:**
+- Cho LLM viết lại expression dễ đọc hơn: loại, mọi lần sinh lại đều có thể đổi behavior.
+- Đưa chuỗi đã render cho LLM: loại, chuỗi lặp subtree (group_*, sqrt, if_else, divide render đối số nhiều lần) và không phân biệt rank scaffolding với rank do builder chọn.
+
+**Rationale:** replicate chỉ đọc profile["data"]["group"] và profile["tree"], nên thêm khoá giải thích vào profile không thể đổi chuỗi. Node rank scaffolding có level == "rank" trong tree nên LLM không kể nó như một tín hiệu.
+
+**Impact on reported results:** không đổi số nào; chuỗi nộp vẫn là chuỗi build gốc. Rủi ro còn lại là LLM mô tả sai ngữ nghĩa (thứ tự y, x của ts_regression, ý nghĩa rettype, filter=true biến NaN thành 0 sau rank).
+
+**Sentiment:** 7 — ranh giới giữa phần sinh và phần diễn giải, reviewer sẽ hỏi.
+
+## 2026-10-29T17:52:22Z | methodology | score: 8 | tag: reform alpha with LLM
+
+**Tags:** reform alpha with LLM
+
+**Decision:** (đề xuất, chưa code) Dạng đọc được của alpha là một bước render từ profile["tree"]: header comment /* HYPOTHESIS / IMPLEMENTATION / HINT */, biến gán một lần cho subtree bị render lặp, rồi biểu thức cuối. Ràng buộc là behavior không đổi, không phải chuỗi không đổi; phiên bản trước của trợ lý đã giả định nhầm là chuỗi không đổi.
+
+**Alternatives considered:**
+- Giữ chuỗi gốc, chỉ đặt giải thích vào regular_desc qua set_alpha_properties (ace_lib.py): an toàn tuyệt đối với behavior nhưng không giải quyết vấn đề lặp subtree.
+- Chuyển mọi call sang infix: loại cho filter=true, vì docstring MatrixBinary ghi filter=true biến NaN thành 0, còn infix chưa được chứng minh làm vậy.
+
+**Rationale:** biến gán một lần giải quyết đúng vấn đề lặp (group_*, sqrt, if_else, divide, trade_when render đối số 2 đến 4 lần). Phần cấu trúc sinh bằng template từ tree; chỉ HYPOTHESIS và HINT cần LLM và phải gắn nhãn giả thuyết.
+
+**Impact on reported results:** nếu platform chấp nhận cú pháp, số liệu không đổi. Chưa xác nhận trong repo: platform có nhận comment block, nhiều câu lệnh, biến, và có đếm operator theo lượt dùng biến hay theo lượt gán; chuỗi dài hơn có chạm giới hạn độ dài không.
+
+**Sentiment:** 8 — định hình lại ràng buộc thiết kế, reviewer sẽ hỏi cách chứng minh tương đương.
+
+## 2026-10-29T17:55:53Z | methodology | score: 9 | tag: reform alpha with LLM
+
+**Tags:** reform alpha with LLM
+
+**Decision:** (tổng hợp, chưa code) Mục tiêu: dùng LLM để alpha do builder sinh ra tường minh và dễ hiểu với con người. Bất biến là behavior của chính expression, không phải từng ký tự của chuỗi. Entry 2026-10-29T17:47:54Z giả định "chuỗi nộp không đổi" và đã bị hiệu chỉnh bởi entry này.
+
+**Dữ kiện quan trọng:**
+- Vấn đề (1): máy đọc được, người không. Ví dụ đã phân tích: subtract(rank(min(rank(vec_avg(mdl109_exp_div_payout)), rank(vec_stddev(time_window_labels)), rank(anl11_2tic))), rank(ts_regression(min_last_trade_price_30m_pre_close_2, vec_max(mdl109_es_ebitda_fy1_r3m), 72, lag=4, rettype=0)), filter=true). 11 operator, trong đó 5 là rank scaffolding (level == "rank" trong tree) và 6 do builder chọn; từ chuỗi không phân biệt được hai loại, từ tree thì có.
+- Vấn đề (2): lặp phần tử chung. Với rank( và filter=true là lặp nhẹ; với group_*, sqrt, if_else, divide, trade_when cả subtree bị render 2 đến 4 lần.
+- Nghĩa nằm ngoài chuỗi: min của các rank là weakest-link; ts_regression nhận y trước, x sau, rettype=0 là residual, lag áp lên x; filter=true chạy sau rank nên NaN thành 0 tức giá trị thấp nhất, không trung tính.
+- Template mẫu của người viết: header /* HYPOTHESIS / IMPLEMENTATION / HINT TO IMPROVE THE ALPHA */, câu lệnh gán alpha = -group_rank(fnd2_ebitdm, industry) - group_rank(fnd2_ebitfr, industry); (có dấu ;), câu lệnh cuối không có ; là if_else(group_rank(fn_assets_fair_val_a, industry) > 0.5, alpha * 2, alpha). Cấu trúc là tín hiệu (alpha) cộng cổng (điều kiện từ field khác). Builder hiện không có kiểu tín hiệu cộng cổng.
+- Header là metadata bọc ngoài, FASTEXPR không có decorator.
+
+**Alternatives considered:**
+- LLM viết lại expression: loại, không có cách kiểm tương đương ngữ nghĩa.
+- Đưa chuỗi đã render cho LLM: loại, lặp subtree và lẫn scaffolding. Đưa profile["tree"], mô tả operator (cache/operators.csv) và profile["data"]["fields"] thay vào đó.
+- Chỉ gắn giải thích vào alpha qua ace_lib.set_alpha_properties(regular_desc=...): an toàn tuyệt đối nhưng không giải quyết vấn đề lặp.
+- Chuyển call sang infix như template mẫu: loại, filter=true của add, subtract, multiply biến NaN thành 0 còn infix thì NaN lan truyền, behavior đổi.
+
+**Rationale:** biến gán một lần giải quyết vấn đề lặp. Phần Implementation sinh được bằng template từ tree, chính xác tuyệt đối. HYPOTHESIS và HINT cần LLM và phải gắn nhãn giả thuyết, vì chọn operator và field là ngẫu nhiên nên lời giải thích chỉ là hậu nghiệm, khác với template của người viết nơi hypothesis có trước. Khớp với system prompt trong LLM_example/example.py ("Distinguish facts from hypotheses"). Cách kiểm: expand dạng đọc được (bỏ comment, thay biến bằng subtree) rồi so từng ký tự với chuỗi gốc; cách này chỉ chứng minh renderer nhất quán, không chứng minh platform đánh giá biến giống hệt.
+
+**Impact on reported results:** none nếu platform chấp nhận cú pháp. Rủi ro còn lại: LLM mô tả sai thứ tự y/x, rettype, tác dụng filter=true sau rank.
+
+**Chưa xác nhận trong repo:**
+- Platform có nhận comment block, nhiều câu lệnh, biến và ; không. ace_lib.generate_alpha đưa chuỗi regular vào payload nguyên văn nên gửi được, nhưng chấp nhận hay không thì chưa biết; chuỗi sai là simulation không chạy.
+- Platform đếm operator theo lượt dùng biến hay lượt gán; OPERATOR_CALL đếm theo text nên dạng biến có thể bị đếm thiếu, giống vấn đề infix đã ghi trong Docs/all-operators.md.
+- time_window_labels và anl11_2tic là field gì (không có trong text repo); cột nào trong 19 cột metadata chứa mô tả field.
+- LLM_example/example.py dùng ChatOllama (lfm2.5-thinking, localhost:11434, temperature 0.7) nên cùng alpha có thể ra văn bản khác nhau; cần hạ temperature và cache theo hash profile; langchain_ollama có trong pyproject.toml hay chưa chưa kiểm.
+
+**Trạng thái:** user yêu cầu dừng, chưa code, chưa chọn dạng đầu ra hay nơi lưu. Câu hỏi chờ trả lời: dạng đọc được được nộp thay chuỗi dày đặc, hay chỉ làm mô tả đi kèm.
+
+**Sentiment:** 9 — định nghĩa lại ràng buộc và ranh giới giữa phần sinh và phần diễn giải, nhiều điểm reviewer sẽ hỏi.

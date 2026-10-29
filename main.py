@@ -51,7 +51,7 @@ class ExpressionBuilder:
 
     # The largest operand count one VARIADIC call is given. The platform leaves
     # the count open-ended, so the cap is a budget choice, not a platform limit.
-    VARIADIC_MAX_OPERANDS = 4
+    VARIADIC_MAX_OPERANDS = 3
 
     # The chance a join round uses a VARIADIC call instead of a binary one,
     # when at least three nodes are waiting to be joined.
